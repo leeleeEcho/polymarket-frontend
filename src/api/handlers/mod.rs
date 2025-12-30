@@ -4,6 +4,7 @@ pub mod account;
 pub mod auth;
 pub mod deposit;
 pub mod market;
+pub mod oracle;
 pub mod order;
 pub mod withdraw;
 

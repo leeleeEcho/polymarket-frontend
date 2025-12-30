@@ -286,6 +286,11 @@ impl ChainlinkClient {
         self.providers.keys().cloned().collect()
     }
 
+    /// Get available networks (alias for get_connected_networks)
+    pub fn available_networks(&self) -> Vec<Network> {
+        self.get_connected_networks()
+    }
+
     /// Check if a network is connected
     pub fn is_connected(&self, network: Network) -> bool {
         self.providers.contains_key(&network)

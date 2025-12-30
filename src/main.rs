@@ -29,6 +29,7 @@ mod websocket;
 use crate::cache::{CacheConfig, CacheManager};
 use crate::config::AppConfig;
 use crate::db::Database;
+use crate::services::chainlink::ChainlinkClient;
 use crate::services::matching::MatchingEngine;
 use crate::services::market::MarketService;
 use metrics_exporter_prometheus::PrometheusHandle;
@@ -41,6 +42,7 @@ pub struct AppState {
     pub market_service: Arc<MarketService>,
     pub order_update_sender: broadcast::Sender<OrderUpdateEvent>,
     pub metrics_handle: PrometheusHandle,
+    pub chainlink_client: Option<Arc<ChainlinkClient>>,
 }
 
 #[tokio::main]
@@ -108,6 +110,15 @@ async fn main() -> anyhow::Result<()> {
     let (order_update_sender, _) = broadcast::channel::<OrderUpdateEvent>(1000);
     tracing::info!("Order update broadcast channel created");
 
+    // Initialize Chainlink client (optional)
+    let chainlink_client = config.create_chainlink_client().map(|client| {
+        tracing::info!("Chainlink Oracle client initialized");
+        Arc::new(client)
+    });
+    if chainlink_client.is_none() && config.has_chainlink_config() {
+        tracing::warn!("Chainlink config found but client initialization failed");
+    }
+
     // Build application state
     let state = Arc::new(AppState {
         config: config.clone(),
@@ -117,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
         market_service,
         order_update_sender,
         metrics_handle,
+        chainlink_client,
     });
 
     // Start trade persistence worker

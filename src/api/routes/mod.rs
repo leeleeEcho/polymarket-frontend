@@ -21,7 +21,12 @@ pub fn create_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/markets/:market_id/orderbook", get(handlers::market::get_orderbook))
         .route("/markets/:market_id/trades", get(handlers::market::get_trades))
         .route("/markets/:market_id/ticker", get(handlers::market::get_ticker))
-        .route("/markets/:market_id/price", get(handlers::market::get_price));
+        .route("/markets/:market_id/price", get(handlers::market::get_price))
+        // Oracle (Chainlink price feeds)
+        .route("/oracle/status", get(handlers::oracle::get_oracle_status))
+        .route("/oracle/chainlink/feeds", get(handlers::oracle::list_chainlink_feeds))
+        .route("/oracle/chainlink/price/:feed", get(handlers::oracle::get_chainlink_price))
+        .route("/oracle/chainlink/prices", get(handlers::oracle::get_chainlink_prices));
 
     // Protected routes (auth required)
     let protected_routes = Router::new()
