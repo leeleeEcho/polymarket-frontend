@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::fmt;
 use uuid::Uuid;
@@ -25,6 +25,7 @@ mod datetime_as_millis {
 }
 
 /// 可选 DateTime 序列化为毫秒时间戳
+#[allow(dead_code)]
 mod option_datetime_as_millis {
     use chrono::{DateTime, Utc};
     use serde::Serializer;
@@ -250,6 +251,7 @@ impl Order {
 }
 
 /// 订单验证错误
+#[allow(dead_code)]
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum OrderValidationError {
     #[error("Invalid price: {0}")]
@@ -299,6 +301,7 @@ pub struct CreateOrderRequest {
     pub timestamp: u64,
 }
 
+#[allow(dead_code)]
 impl CreateOrderRequest {
     /// 最小价格
     pub const MIN_PRICE: &'static str = "0.01";
@@ -413,6 +416,7 @@ impl From<Order> for OrderResponse {
 }
 
 /// 取消订单请求
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelOrderRequest {
     /// 订单 ID
@@ -426,6 +430,7 @@ pub struct CancelOrderRequest {
 }
 
 /// 订单列表查询参数
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OrderListQuery {
     /// 市场 ID 过滤

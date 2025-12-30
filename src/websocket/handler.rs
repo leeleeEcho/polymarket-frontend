@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::auth::eip712::{verify_ws_auth_signature, WebSocketAuthMessage};
 use crate::auth::jwt::validate_token;
+#[allow(unused_imports)]
 use crate::services::matching::OrderbookUpdate;
 use crate::AppState;
 
@@ -84,6 +85,7 @@ pub enum ClientMessage {
     Ping,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ServerMessage {
@@ -215,6 +217,7 @@ pub struct KlineData {
 }
 
 /// Validate timestamp (within 5 minutes)
+#[allow(dead_code)]
 fn validate_timestamp(timestamp: u64) -> bool {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

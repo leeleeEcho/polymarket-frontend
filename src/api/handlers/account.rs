@@ -50,6 +50,7 @@ pub struct BalancesResponse {
 }
 
 /// User's share holdings in prediction markets
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ShareDetail {
     pub id: Uuid,
@@ -64,6 +65,7 @@ pub struct ShareDetail {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct SharesResponse {
     pub shares: Vec<ShareDetail>,

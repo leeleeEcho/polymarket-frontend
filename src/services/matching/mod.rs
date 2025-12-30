@@ -36,8 +36,12 @@ mod orchestrator;
 mod types;
 
 // Re-export main types
+// Note: Some of these may appear unused but are part of the public API
+#[allow(unused_imports)]
 pub use engine::{EngineStats, MatchingEngine};
+#[allow(unused_imports)]
 pub use history::{HistoryManager, HistoryStats};
+#[allow(unused_imports)]
 pub use orderbook::Orderbook;
 pub use orchestrator::OrderFlowOrchestrator;
 pub use types::*;

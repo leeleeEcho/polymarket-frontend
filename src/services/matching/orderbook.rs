@@ -234,7 +234,7 @@ impl Orderbook {
     pub fn match_order(
         &self,
         taker_order_id: Uuid,
-        taker_address: &str,
+        _taker_address: &str,
         side: Side,
         mut amount: Decimal,
         limit_price: Option<Decimal>,

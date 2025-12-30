@@ -3,12 +3,13 @@
 //! Provides PostgreSQL connection pool management with optimized settings
 //! for high-frequency trading workloads.
 
+// Note: timescale module contains legacy K-line functionality for futures trading.
+// Kept for reference but not used in prediction market implementation.
+#[allow(dead_code)]
 pub mod timescale;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::time::Duration;
-
-pub use timescale::{ChunkInfo, CompressionStats, Kline, KlinePeriod, TimescaleOps};
 
 /// Database configuration
 #[derive(Debug, Clone)]

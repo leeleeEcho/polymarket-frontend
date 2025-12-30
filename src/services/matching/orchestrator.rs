@@ -8,6 +8,8 @@
 //! 5. Persist to database asynchronously
 //! 6. Broadcast updates via WebSocket
 
+#![allow(dead_code)]
+
 use super::engine::MatchingEngine;
 use super::types::*;
 use crate::models::market::ShareType;
@@ -224,7 +226,7 @@ impl OrderFlowOrchestrator {
         // Use the fees calculated by the matching engine
         let maker_fee = trade.maker_fee;
         let taker_fee = trade.taker_fee;
-        let trade_value = trade.amount * trade.price;
+        let _trade_value = trade.amount * trade.price;
 
         // 1. Save trade record
         sqlx::query(

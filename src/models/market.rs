@@ -2,6 +2,8 @@
 //!
 //! 定义预测市场的核心数据结构，包括市场、结果选项和份额类型。
 
+#![allow(dead_code)]
+
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};

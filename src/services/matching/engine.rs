@@ -171,7 +171,7 @@ impl MatchingEngine {
     fn try_mint_match(
         &self,
         taker_order_id: Uuid,
-        taker_address: &str,
+        _taker_address: &str,
         taker_share_type: ShareType,
         taker_market_key: &str,
         complement_orderbook: &Orderbook,
@@ -251,7 +251,7 @@ impl MatchingEngine {
     fn try_merge_match(
         &self,
         taker_order_id: Uuid,
-        taker_address: &str,
+        _taker_address: &str,
         taker_share_type: ShareType,
         taker_market_key: &str,
         complement_orderbook: &Orderbook,
@@ -514,7 +514,7 @@ impl MatchingEngine {
                             time_in_force: TimeInForce::GTC,
                             timestamp: now,
                         };
-                        orderbook.add_order(entry);
+                        let _ = orderbook.add_order(entry);
                     }
                     OrderStatus::PartiallyFilled
                 } else {
@@ -529,7 +529,7 @@ impl MatchingEngine {
                         time_in_force: TimeInForce::GTC,
                         timestamp: now,
                     };
-                    orderbook.add_order(entry);
+                    let _ = orderbook.add_order(entry);
                     OrderStatus::Open
                 }
             }

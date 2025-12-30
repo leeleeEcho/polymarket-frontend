@@ -3,7 +3,7 @@
 //! Handles order creation, cancellation, and querying for prediction market orders.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     Extension, Json,
 };
@@ -20,7 +20,7 @@ use crate::auth::eip712::{
 use crate::auth::middleware::AuthUser;
 use crate::models::market::ShareType;
 use crate::models::{
-    CreateOrderRequest, Order, OrderListQuery, OrderResponse, OrderSide, OrderStatus, OrderType,
+    CreateOrderRequest, Order, OrderResponse, OrderSide, OrderStatus, OrderType,
 };
 use crate::services::matching::{
     OrderType as MatchingOrderType, Side as MatchingSide,
@@ -37,6 +37,7 @@ pub struct CancelOrderRequest {
     pub timestamp: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BatchCancelRequest {
     pub order_ids: Vec<Uuid>,

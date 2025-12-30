@@ -4,6 +4,7 @@
 //! Format: {service}:{entity}:{identifier}:{field}
 
 /// Cache key prefixes
+#[allow(dead_code)]
 pub mod prefix {
     pub const PRICE: &str = "price";
     pub const ORDERBOOK: &str = "orderbook";
@@ -19,6 +20,7 @@ pub mod prefix {
 }
 
 /// Cache TTL values in seconds
+#[allow(dead_code)]
 pub mod ttl {
     /// Price data TTL (5 seconds)
     pub const PRICE: u64 = 5;
@@ -41,8 +43,10 @@ pub mod ttl {
 }
 
 /// Cache key builders
+#[allow(dead_code)]
 pub struct CacheKey;
 
+#[allow(dead_code)]
 impl CacheKey {
     // ==================== Price Keys ====================
 

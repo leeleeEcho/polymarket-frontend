@@ -39,12 +39,14 @@ impl PriceLevel {
 
     /// Get the complement price level (1 - price)
     /// For prediction markets: Yes_price + No_price = 1
+    #[allow(dead_code)]
     pub fn complement(&self) -> Self {
         let one = 100_000_000i64; // 1.0 in scaled form
         PriceLevel(one - self.0)
     }
 
     /// Check if price is valid for prediction markets (0 < price < 1)
+    #[allow(dead_code)]
     pub fn is_valid_probability(&self) -> bool {
         self.0 > 0 && self.0 < 100_000_000
     }

@@ -222,6 +222,7 @@ impl CacheManager {
 
     /// Get price cache (returns NoOp implementation if not available)
     pub fn price(&self) -> &PriceCache {
+        #[allow(dead_code)]
         static NOOP: std::sync::OnceLock<PriceCache> = std::sync::OnceLock::new();
         self.price_cache.as_ref().unwrap_or_else(|| {
             // This is a fallback that will fail gracefully
