@@ -28,9 +28,9 @@ pub fn create_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Account
         .route("/account/profile", get(handlers::account::get_profile))
         .route("/account/balances", get(handlers::account::get_balances))
+        .route("/account/shares", get(handlers::account::get_shares))
         .route("/account/orders", get(handlers::account::get_orders))
         .route("/account/trades", get(handlers::account::get_trades))
-        // TODO: Add /account/shares when shares feature is implemented
         // Orders
         .route("/orders", post(handlers::order::create_order))
         .route("/orders/:order_id", get(handlers::order::get_order))

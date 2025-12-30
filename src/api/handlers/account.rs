@@ -50,7 +50,6 @@ pub struct BalancesResponse {
 }
 
 /// User's share holdings in prediction markets
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ShareDetail {
     pub id: Uuid,
@@ -59,17 +58,22 @@ pub struct ShareDetail {
     pub share_type: ShareType,
     pub amount: Decimal,
     pub avg_cost: Decimal,
+    pub current_price: Decimal,
+    pub unrealized_pnl: Decimal,
+    pub market_question: Option<String>,
+    pub outcome_name: Option<String>,
     #[serde(serialize_with = "datetime_as_millis::serialize")]
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "datetime_as_millis::serialize")]
     pub updated_at: DateTime<Utc>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct SharesResponse {
     pub shares: Vec<ShareDetail>,
     pub total_value: Decimal,
+    pub total_cost: Decimal,
+    pub total_unrealized_pnl: Decimal,
 }
 
 /// Order detail for prediction markets
@@ -135,6 +139,13 @@ pub struct TradesQuery {
     pub market_id: Option<Uuid>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SharesQuery {
+    pub market_id: Option<Uuid>,
+    /// Filter: only show non-zero positions
+    pub active_only: Option<bool>,
 }
 
 // ============================================================================
@@ -455,4 +466,158 @@ pub async fn get_trades(
     let total = trades.len() as i64;
 
     Ok(Json(TradesResponse { trades, total }))
+}
+
+/// Get user share holdings
+/// GET /account/shares
+pub async fn get_shares(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Query(query): Query<SharesQuery>,
+) -> Result<Json<SharesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user_address = auth_user.address.to_lowercase();
+    let active_only = query.active_only.unwrap_or(true);
+
+    // Build query based on filters
+    let rows: Vec<(
+        Uuid,      // shares.id
+        Uuid,      // shares.market_id
+        Uuid,      // shares.outcome_id
+        String,    // shares.share_type
+        Decimal,   // shares.amount
+        Decimal,   // shares.avg_cost
+        DateTime<Utc>, // shares.created_at
+        DateTime<Utc>, // shares.updated_at
+        String,    // markets.question
+        String,    // outcomes.name
+        Decimal,   // outcomes.probability
+    )> = if let Some(market_id) = query.market_id {
+        let sql = if active_only {
+            r#"
+            SELECT s.id, s.market_id, s.outcome_id, s.share_type::text, s.amount, s.avg_cost,
+                   s.created_at, s.updated_at,
+                   m.question, o.name, o.probability
+            FROM shares s
+            JOIN markets m ON s.market_id = m.id
+            JOIN outcomes o ON s.outcome_id = o.id
+            WHERE s.user_address = $1 AND s.market_id = $2 AND s.amount > 0
+            ORDER BY s.updated_at DESC
+            "#
+        } else {
+            r#"
+            SELECT s.id, s.market_id, s.outcome_id, s.share_type::text, s.amount, s.avg_cost,
+                   s.created_at, s.updated_at,
+                   m.question, o.name, o.probability
+            FROM shares s
+            JOIN markets m ON s.market_id = m.id
+            JOIN outcomes o ON s.outcome_id = o.id
+            WHERE s.user_address = $1 AND s.market_id = $2
+            ORDER BY s.updated_at DESC
+            "#
+        };
+        sqlx::query_as(sql)
+            .bind(&user_address)
+            .bind(market_id)
+            .fetch_all(&state.db.pool)
+            .await
+    } else {
+        let sql = if active_only {
+            r#"
+            SELECT s.id, s.market_id, s.outcome_id, s.share_type::text, s.amount, s.avg_cost,
+                   s.created_at, s.updated_at,
+                   m.question, o.name, o.probability
+            FROM shares s
+            JOIN markets m ON s.market_id = m.id
+            JOIN outcomes o ON s.outcome_id = o.id
+            WHERE s.user_address = $1 AND s.amount > 0
+            ORDER BY s.updated_at DESC
+            "#
+        } else {
+            r#"
+            SELECT s.id, s.market_id, s.outcome_id, s.share_type::text, s.amount, s.avg_cost,
+                   s.created_at, s.updated_at,
+                   m.question, o.name, o.probability
+            FROM shares s
+            JOIN markets m ON s.market_id = m.id
+            JOIN outcomes o ON s.outcome_id = o.id
+            WHERE s.user_address = $1
+            ORDER BY s.updated_at DESC
+            "#
+        };
+        sqlx::query_as(sql)
+            .bind(&user_address)
+            .fetch_all(&state.db.pool)
+            .await
+    }
+    .map_err(|e| {
+        tracing::error!("Failed to fetch shares: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "获取持仓失败".to_string(),
+                code: "SHARES_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let mut total_value = Decimal::ZERO;
+    let mut total_cost = Decimal::ZERO;
+
+    let shares: Vec<ShareDetail> = rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                market_id,
+                outcome_id,
+                share_type,
+                amount,
+                avg_cost,
+                created_at,
+                updated_at,
+                question,
+                outcome_name,
+                probability,
+            )| {
+                // Current price is the probability for Yes shares, or 1-probability for No shares
+                let share_type_parsed = share_type.parse().unwrap_or(ShareType::Yes);
+                let current_price = match share_type_parsed {
+                    ShareType::Yes => probability,
+                    ShareType::No => Decimal::ONE - probability,
+                };
+
+                // Calculate value and PnL
+                let position_value = amount * current_price;
+                let position_cost = amount * avg_cost;
+                let unrealized_pnl = position_value - position_cost;
+
+                total_value += position_value;
+                total_cost += position_cost;
+
+                ShareDetail {
+                    id,
+                    market_id,
+                    outcome_id,
+                    share_type: share_type_parsed,
+                    amount,
+                    avg_cost,
+                    current_price,
+                    unrealized_pnl,
+                    market_question: Some(question),
+                    outcome_name: Some(outcome_name),
+                    created_at,
+                    updated_at,
+                }
+            },
+        )
+        .collect();
+
+    let total_unrealized_pnl = total_value - total_cost;
+
+    Ok(Json(SharesResponse {
+        shares,
+        total_value,
+        total_cost,
+        total_unrealized_pnl,
+    }))
 }
