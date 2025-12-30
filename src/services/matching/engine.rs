@@ -37,10 +37,9 @@ pub struct MatchingEngine {
 impl MatchingEngine {
     /// Create a new matching engine
     pub fn new() -> Self {
-        Self::with_symbols(vec![
-            "BTCUSDT".to_string(),
-            "ETHUSDT".to_string(),
-        ])
+        // Start with empty orderbooks for prediction markets
+        // Orderbooks are created dynamically when orders are submitted
+        Self::with_symbols(vec![])
     }
 
     /// Create with specific symbols
@@ -139,11 +138,14 @@ impl MatchingEngine {
         order_type: OrderType,
         amount: Decimal,
         price: Option<Decimal>,
-        leverage: u32,
+        _leverage: u32,
     ) -> Result<MatchResult, MatchingError> {
-        // Validate symbol
-        let orderbook = self.orderbooks.get(symbol)
-            .ok_or_else(|| MatchingError::SymbolNotFound(symbol.to_string()))?;
+        // Get or create orderbook for this symbol/market_key
+        // For prediction markets, orderbooks are created dynamically
+        let orderbook = self.orderbooks
+            .entry(symbol.to_string())
+            .or_insert_with(|| Arc::new(Orderbook::new(symbol.to_string())))
+            .clone();
 
         // Validate inputs
         if amount <= Decimal::ZERO {
@@ -175,20 +177,19 @@ impl MatchingEngine {
 
         // Broadcast trade events
         for trade in &trades {
-            let event = TradeEvent {
-                symbol: symbol.to_string(),
-                trade_id: trade.trade_id,
-                maker_order_id: trade.maker_order_id,
-                taker_order_id: trade.taker_order_id,
-                maker_address: trade.maker_address.clone(),
-                taker_address: user_address.to_string(),
-                side: side.to_string(),
-                price: trade.price,
-                amount: trade.amount,
-                maker_fee: trade.maker_fee,
-                taker_fee: trade.taker_fee,
-                timestamp: trade.timestamp,
-            };
+            let event = TradeEvent::new(
+                symbol.to_string(),
+                trade.trade_id,
+                trade.maker_order_id,
+                trade.taker_order_id,
+                trade.maker_address.clone(),
+                user_address.to_string(),
+                side,
+                trade.price,
+                trade.amount,
+                trade.maker_fee,
+                trade.taker_fee,
+            );
 
             // Broadcast with detailed logging
             match self.trade_sender.send(event.clone()) {
@@ -279,7 +280,7 @@ impl MatchingEngine {
             filled_amount: filled_amount.to_string(),
             remaining_amount: remaining.to_string(),
             status: status.to_string(),
-            leverage,
+            leverage: 1, // No leverage in prediction markets
             created_at: now,
             updated_at: now,
             avg_fill_price: average_price.map(|p| p.to_string()),
@@ -495,139 +496,148 @@ mod tests {
     use super::*;
     use rust_decimal_macros::dec;
 
+    fn create_market_key() -> String {
+        let market_id = Uuid::new_v4();
+        let outcome_id = Uuid::new_v4();
+        format!("{}:{}:yes", market_id, outcome_id)
+    }
+
     #[test]
     fn test_engine_creation() {
         let engine = MatchingEngine::new();
-        assert_eq!(engine.symbols().len(), 2);
-        assert!(engine.is_valid_symbol("BTCUSDT"));
-        assert!(engine.is_valid_symbol("ETHUSDT"));
-        assert!(!engine.is_valid_symbol("INVALID"));
+        // New engine starts empty (no default symbols for prediction markets)
+        assert!(engine.symbols().is_empty());
     }
 
     #[test]
     fn test_submit_limit_order_no_match() {
         let engine = MatchingEngine::new();
+        let market_key = create_market_key();
 
         let result = engine.submit_order(
             Uuid::new_v4(),
-            "BTCUSDT",
+            &market_key,
             "0x1234",
             Side::Buy,
             OrderType::Limit,
-            dec!(1.0),
-            Some(dec!(100.0)),
+            dec!(100.0),
+            Some(dec!(0.55)), // probability price 0-1
             1,
         ).unwrap();
 
         assert_eq!(result.status, OrderStatus::Open);
         assert_eq!(result.filled_amount, dec!(0));
-        assert_eq!(result.remaining_amount, dec!(1.0));
+        assert_eq!(result.remaining_amount, dec!(100.0));
         assert!(result.trades.is_empty());
     }
 
     #[test]
     fn test_submit_and_match_orders() {
         let engine = MatchingEngine::new();
+        let market_key = create_market_key();
 
-        // Submit sell order
+        // Submit sell order at 0.60
         let sell_result = engine.submit_order(
             Uuid::new_v4(),
-            "BTCUSDT",
+            &market_key,
             "0x1111",
             Side::Sell,
             OrderType::Limit,
-            dec!(1.0),
-            Some(dec!(100.0)),
+            dec!(100.0),
+            Some(dec!(0.60)),
             1,
         ).unwrap();
         assert_eq!(sell_result.status, OrderStatus::Open);
 
-        // Submit matching buy order
+        // Submit matching buy order at 0.60
         let buy_result = engine.submit_order(
             Uuid::new_v4(),
-            "BTCUSDT",
+            &market_key,
             "0x2222",
             Side::Buy,
             OrderType::Limit,
-            dec!(0.5),
-            Some(dec!(100.0)),
+            dec!(50.0),
+            Some(dec!(0.60)),
             1,
         ).unwrap();
 
         assert_eq!(buy_result.status, OrderStatus::Filled);
-        assert_eq!(buy_result.filled_amount, dec!(0.5));
+        assert_eq!(buy_result.filled_amount, dec!(50.0));
         assert_eq!(buy_result.trades.len(), 1);
-        assert_eq!(buy_result.trades[0].price, dec!(100.0));
-        assert_eq!(buy_result.trades[0].amount, dec!(0.5));
+        assert_eq!(buy_result.trades[0].price, dec!(0.60));
+        assert_eq!(buy_result.trades[0].amount, dec!(50.0));
     }
 
     #[test]
     fn test_market_order() {
         let engine = MatchingEngine::new();
+        let market_key = create_market_key();
 
-        // Add liquidity
+        // Add liquidity (sell order)
         engine.submit_order(
             Uuid::new_v4(),
-            "BTCUSDT",
+            &market_key,
             "0x1111",
             Side::Sell,
             OrderType::Limit,
-            dec!(1.0),
-            Some(dec!(100.0)),
+            dec!(100.0),
+            Some(dec!(0.65)),
             1,
         ).unwrap();
 
         // Market buy
         let result = engine.submit_order(
             Uuid::new_v4(),
-            "BTCUSDT",
+            &market_key,
             "0x2222",
             Side::Buy,
             OrderType::Market,
-            dec!(0.5),
+            dec!(50.0),
             None,
             1,
         ).unwrap();
 
         assert_eq!(result.status, OrderStatus::Filled);
-        assert_eq!(result.filled_amount, dec!(0.5));
+        assert_eq!(result.filled_amount, dec!(50.0));
     }
 
     #[test]
     fn test_cancel_order() {
         let engine = MatchingEngine::new();
+        let market_key = create_market_key();
 
         let result = engine.submit_order(
             Uuid::new_v4(),
-            "BTCUSDT",
+            &market_key,
             "0x1234",
             Side::Buy,
             OrderType::Limit,
-            dec!(1.0),
-            Some(dec!(100.0)),
+            dec!(100.0),
+            Some(dec!(0.55)),
             1,
         ).unwrap();
 
-        let cancelled = engine.cancel_order("BTCUSDT", result.order_id, "0x1234").unwrap();
+        let cancelled = engine.cancel_order(&market_key, result.order_id, "0x1234").unwrap();
         assert!(cancelled);
 
         // Try to cancel again
-        let cancelled_again = engine.cancel_order("BTCUSDT", result.order_id, "0x1234").unwrap();
+        let cancelled_again = engine.cancel_order(&market_key, result.order_id, "0x1234").unwrap();
         assert!(!cancelled_again);
     }
 
     #[test]
     fn test_orderbook_snapshot() {
         let engine = MatchingEngine::new();
+        let market_key = create_market_key();
 
-        // Add orders
-        engine.submit_order(Uuid::new_v4(), "BTCUSDT", "0x1", Side::Buy, OrderType::Limit, dec!(1.0), Some(dec!(99.0)), 1).unwrap();
-        engine.submit_order(Uuid::new_v4(), "BTCUSDT", "0x2", Side::Buy, OrderType::Limit, dec!(2.0), Some(dec!(98.0)), 1).unwrap();
-        engine.submit_order(Uuid::new_v4(), "BTCUSDT", "0x3", Side::Sell, OrderType::Limit, dec!(1.5), Some(dec!(101.0)), 1).unwrap();
+        // Add orders with probability prices
+        engine.submit_order(Uuid::new_v4(), &market_key, "0x1", Side::Buy, OrderType::Limit, dec!(100.0), Some(dec!(0.55)), 1).unwrap();
+        engine.submit_order(Uuid::new_v4(), &market_key, "0x2", Side::Buy, OrderType::Limit, dec!(200.0), Some(dec!(0.50)), 1).unwrap();
+        engine.submit_order(Uuid::new_v4(), &market_key, "0x3", Side::Sell, OrderType::Limit, dec!(150.0), Some(dec!(0.65)), 1).unwrap();
 
-        let snapshot = engine.get_orderbook("BTCUSDT", 10).unwrap();
+        let snapshot = engine.get_orderbook(&market_key, 10).unwrap();
 
-        assert_eq!(snapshot.symbol, "BTCUSDT");
+        assert!(snapshot.symbol.contains("yes")); // market_key contains share type
         assert_eq!(snapshot.bids.len(), 2);
         assert_eq!(snapshot.asks.len(), 1);
     }
@@ -635,21 +645,23 @@ mod tests {
     #[test]
     fn test_trade_history() {
         let engine = MatchingEngine::new();
+        let market_key = create_market_key();
 
         // Create trades
-        engine.submit_order(Uuid::new_v4(), "BTCUSDT", "0x1", Side::Sell, OrderType::Limit, dec!(1.0), Some(dec!(100.0)), 1).unwrap();
-        engine.submit_order(Uuid::new_v4(), "BTCUSDT", "0x2", Side::Buy, OrderType::Limit, dec!(1.0), Some(dec!(100.0)), 1).unwrap();
+        engine.submit_order(Uuid::new_v4(), &market_key, "0x1", Side::Sell, OrderType::Limit, dec!(100.0), Some(dec!(0.60)), 1).unwrap();
+        engine.submit_order(Uuid::new_v4(), &market_key, "0x2", Side::Buy, OrderType::Limit, dec!(100.0), Some(dec!(0.60)), 1).unwrap();
 
-        let trades = engine.get_trades("BTCUSDT", &TradeHistoryQuery::default());
+        let trades = engine.get_trades(&market_key, &TradeHistoryQuery::default());
         assert_eq!(trades.total_count, 1);
     }
 
     #[test]
     fn test_order_history() {
         let engine = MatchingEngine::new();
+        let market_key = create_market_key();
 
-        engine.submit_order(Uuid::new_v4(), "BTCUSDT", "0x1234", Side::Buy, OrderType::Limit, dec!(1.0), Some(dec!(100.0)), 1).unwrap();
-        engine.submit_order(Uuid::new_v4(), "BTCUSDT", "0x1234", Side::Sell, OrderType::Limit, dec!(0.5), Some(dec!(105.0)), 1).unwrap();
+        engine.submit_order(Uuid::new_v4(), &market_key, "0x1234", Side::Buy, OrderType::Limit, dec!(100.0), Some(dec!(0.55)), 1).unwrap();
+        engine.submit_order(Uuid::new_v4(), &market_key, "0x1234", Side::Sell, OrderType::Limit, dec!(50.0), Some(dec!(0.65)), 1).unwrap();
 
         let orders = engine.get_orders("0x1234", &OrderHistoryQuery::default());
         assert_eq!(orders.total_count, 2);
@@ -658,9 +670,11 @@ mod tests {
     #[test]
     fn test_stats() {
         let engine = MatchingEngine::new();
+        let market_key1 = create_market_key();
+        let market_key2 = create_market_key();
 
-        engine.submit_order(Uuid::new_v4(), "BTCUSDT", "0x1", Side::Buy, OrderType::Limit, dec!(1.0), Some(dec!(100.0)), 1).unwrap();
-        engine.submit_order(Uuid::new_v4(), "ETHUSDT", "0x2", Side::Sell, OrderType::Limit, dec!(2.0), Some(dec!(3000.0)), 1).unwrap();
+        engine.submit_order(Uuid::new_v4(), &market_key1, "0x1", Side::Buy, OrderType::Limit, dec!(100.0), Some(dec!(0.55)), 1).unwrap();
+        engine.submit_order(Uuid::new_v4(), &market_key2, "0x2", Side::Sell, OrderType::Limit, dec!(200.0), Some(dec!(0.65)), 1).unwrap();
 
         let stats = engine.stats();
         assert_eq!(stats.symbols_count, 2);

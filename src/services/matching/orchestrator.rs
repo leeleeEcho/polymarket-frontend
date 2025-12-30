@@ -1,14 +1,16 @@
 //! Order Flow Orchestrator
 //!
-//! Orchestrates the complete order processing flow:
+//! Orchestrates the complete order processing flow for prediction markets:
 //! 1. Receive order from API
 //! 2. Execute matching via MatchingEngine
-//! 3. Process match results
-//! 4. Persist to database asynchronously
-//! 5. Broadcast updates via WebSocket
+//! 3. Process match results (including Mint/Merge logic)
+//! 4. Update share positions
+//! 5. Persist to database asynchronously
+//! 6. Broadcast updates via WebSocket
 
 use super::engine::MatchingEngine;
 use super::types::*;
+use crate::models::market::ShareType;
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -16,10 +18,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::services::position::PositionService;
-use crate::models::PositionSide;
-
-/// Order flow orchestrator
+/// Order flow orchestrator for prediction markets
 ///
 /// Connects matching engine with database persistence and WebSocket broadcasting.
 /// All database operations are async and non-blocking.
@@ -85,60 +84,67 @@ impl OrderFlowOrchestrator {
         engine
     }
 
-    /// Process a new order
-    ///
-    /// This is the main entry point for order processing:
-    /// 1. Validates the order
-    /// 2. Submits to matching engine
-    /// 3. Spawns async task for database persistence
-    /// 4. Returns immediately with match result
+    /// Process a new order for prediction market
     pub async fn process_order(
         &self,
-        symbol: &str,
+        market_id: Uuid,
+        outcome_id: Uuid,
+        share_type: ShareType,
         user_address: &str,
         side: Side,
         order_type: OrderType,
         amount: Decimal,
-        price: Option<Decimal>,
-        leverage: u32,
+        price: Decimal,
     ) -> Result<MatchResult, MatchingError> {
         debug!(
-            "Processing order: symbol={}, user={}, side={:?}, type={:?}, amount={}, price={:?}",
-            symbol, user_address, side, order_type, amount, price
+            "Processing order: market={}, outcome={}, share_type={:?}, user={}, side={:?}, type={:?}, amount={}, price={}",
+            market_id, outcome_id, share_type, user_address, side, order_type, amount, price
         );
+
+        // Validate price range (0 < price < 1)
+        if price <= Decimal::ZERO || price >= Decimal::ONE {
+            return Err(MatchingError::InvalidPrice(format!(
+                "Price must be between 0 and 1, got {}",
+                price
+            )));
+        }
 
         // Generate order ID
         let order_id = Uuid::new_v4();
 
-        // Submit to matching engine (synchronous, in-memory)
+        // Build market key for orderbook: market_id:outcome_id:share_type
+        let market_key = format!("{}:{}:{}", market_id, outcome_id, share_type);
+
+        // Submit to matching engine (use market_key as "symbol" and leverage=1 for prediction markets)
         let result = self.engine.submit_order(
             order_id,
-            symbol,
+            &market_key,
             user_address,
             side,
             order_type,
             amount,
-            price,
-            leverage,
+            Some(price),
+            1, // No leverage in prediction markets
         )?;
 
         // Spawn async task for database persistence
         let pool = self.pool.clone();
-        let symbol = symbol.to_string();
         let user_address = user_address.to_string();
         let result_clone = result.clone();
+        let share_type_clone = share_type.clone();
 
         tokio::spawn(async move {
             if let Err(e) = Self::persist_order(
                 &pool,
-                &symbol,
+                market_id,
+                outcome_id,
+                share_type_clone,
                 &user_address,
                 &result_clone,
                 side,
                 order_type,
                 amount,
                 price,
-                leverage,
             ).await {
                 error!("Failed to persist order {}: {}", order_id, e);
             }
@@ -155,19 +161,23 @@ impl OrderFlowOrchestrator {
     /// Cancel an order
     pub async fn cancel_order(
         &self,
-        symbol: &str,
+        market_id: Uuid,
+        outcome_id: Uuid,
+        share_type: ShareType,
         order_id: Uuid,
         user_address: &str,
     ) -> Result<bool, MatchingError> {
-        debug!("Cancelling order: id={}, symbol={}", order_id, symbol);
+        debug!("Cancelling order: id={}, market={}", order_id, market_id);
+
+        // Build market key for orderbook
+        let market_key = format!("{}:{}:{}", market_id, outcome_id, share_type);
 
         // Cancel in matching engine
-        let cancelled = self.engine.cancel_order(symbol, order_id, user_address)?;
+        let cancelled = self.engine.cancel_order(&market_key, order_id, user_address)?;
 
         if cancelled {
             // Update database asynchronously
             let pool = self.pool.clone();
-            let order_id = order_id;
 
             tokio::spawn(async move {
                 if let Err(e) = Self::update_order_status(&pool, order_id, "cancelled").await {
@@ -181,14 +191,23 @@ impl OrderFlowOrchestrator {
         Ok(cancelled)
     }
 
-    /// Get orderbook
-    pub fn get_orderbook(&self, symbol: &str, depth: usize) -> Result<OrderbookSnapshot, MatchingError> {
-        self.engine.get_orderbook(symbol, depth)
+    /// Get orderbook for an outcome
+    pub fn get_orderbook(
+        &self,
+        market_id: Uuid,
+        outcome_id: Uuid,
+        share_type: ShareType,
+        depth: usize,
+    ) -> Result<OrderbookSnapshot, MatchingError> {
+        // Build market key for orderbook
+        let market_key = format!("{}:{}:{}", market_id, outcome_id, share_type);
+        self.engine.get_orderbook(&market_key, depth)
     }
 
     /// Get trade history
-    pub fn get_trades(&self, symbol: &str, query: &TradeHistoryQuery) -> TradeHistoryResponse {
-        self.engine.get_trades(symbol, query)
+    pub fn get_trades(&self, market_id: Uuid, query: &TradeHistoryQuery) -> TradeHistoryResponse {
+        // Use market_id as the symbol prefix for trade lookup
+        self.engine.get_trades(&market_id.to_string(), query)
     }
 
     /// Get order history
@@ -200,28 +219,39 @@ impl OrderFlowOrchestrator {
     // Database Persistence
     // ========================================================================
 
-    /// Persist a trade to database and update positions
+    /// Persist a trade to database and update share positions
     pub async fn persist_trade(pool: &PgPool, trade: &TradeEvent) -> Result<(), sqlx::Error> {
-        // Calculate fees (0.02% maker, 0.05% taker)
+        // Use the fees calculated by the matching engine
+        let maker_fee = trade.maker_fee;
+        let taker_fee = trade.taker_fee;
         let trade_value = trade.amount * trade.price;
-        let maker_fee = trade_value * Decimal::from_str_exact("0.0002").unwrap();
-        let taker_fee = trade_value * Decimal::from_str_exact("0.0005").unwrap();
 
         // 1. Save trade record
         sqlx::query(
             r#"
-            INSERT INTO trades (id, symbol, maker_order_id, taker_order_id, maker_address, taker_address, side, price, amount, maker_fee, taker_fee, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::order_side, $8, $9, $10, $11, to_timestamp($12::double precision / 1000))
-            ON CONFLICT (id, created_at) DO NOTHING
+            INSERT INTO trades (
+                id, market_id, outcome_id, share_type, match_type,
+                maker_order_id, taker_order_id, maker_address, taker_address,
+                side, price, amount, maker_fee, taker_fee, created_at
+            )
+            VALUES (
+                $1, $2, $3, $4::share_type, $5::match_type,
+                $6, $7, $8, $9,
+                $10::order_side, $11, $12, $13, $14, to_timestamp($15::double precision / 1000)
+            )
+            ON CONFLICT (id) DO NOTHING
             "#
         )
         .bind(trade.trade_id)
-        .bind(&trade.symbol)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(trade.share_type.to_string())
+        .bind(trade.match_type.to_string())
         .bind(trade.maker_order_id)
         .bind(trade.taker_order_id)
         .bind(&trade.maker_address)
         .bind(&trade.taker_address)
-        .bind(&trade.side)
+        .bind(trade.side.to_string())
         .bind(trade.price)
         .bind(trade.amount)
         .bind(maker_fee)
@@ -230,193 +260,232 @@ impl OrderFlowOrchestrator {
         .execute(pool)
         .await?;
 
-        debug!("Persisted trade: {}", trade.trade_id);
+        debug!("Persisted trade: {} (match_type={:?})", trade.trade_id, trade.match_type);
 
-        // 2. Get leverage info from orders
-        let maker_leverage: Option<i32> = sqlx::query_scalar(
-            "SELECT leverage FROM orders WHERE id = $1"
+        // 2. Update share positions based on match type
+        match trade.match_type {
+            MatchType::Normal => {
+                // Normal trade: transfer shares between maker and taker
+                Self::update_shares_normal(pool, trade).await?;
+            }
+            MatchType::Mint => {
+                // Mint: both parties receive new shares
+                Self::update_shares_mint(pool, trade).await?;
+            }
+            MatchType::Merge => {
+                // Merge: both parties redeem shares for collateral
+                Self::update_shares_merge(pool, trade).await?;
+            }
+        }
+
+        // 3. Record share changes for audit trail
+        Self::record_share_changes(pool, trade).await?;
+
+        debug!("Updated share positions for trade: {}", trade.trade_id);
+        Ok(())
+    }
+
+    /// Update shares for normal trade (transfer between parties)
+    async fn update_shares_normal(pool: &PgPool, trade: &TradeEvent) -> Result<(), sqlx::Error> {
+        // Determine buyer and seller based on taker's side
+        let is_buy = trade.side.to_lowercase() == "buy";
+        let (buyer_address, seller_address) = if is_buy {
+            (&trade.taker_address, &trade.maker_address)
+        } else {
+            (&trade.maker_address, &trade.taker_address)
+        };
+
+        // Decrease seller's shares
+        sqlx::query(
+            r#"
+            INSERT INTO shares (user_address, market_id, outcome_id, share_type, amount, avg_cost)
+            VALUES ($1, $2, $3, $4::share_type, -$5, $6)
+            ON CONFLICT (user_address, outcome_id) DO UPDATE SET
+                amount = shares.amount - $5,
+                updated_at = NOW()
+            "#
         )
+        .bind(seller_address)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(trade.share_type.to_string())
+        .bind(trade.amount)
+        .bind(trade.price)
+        .execute(pool)
+        .await?;
+
+        // Increase buyer's shares
+        sqlx::query(
+            r#"
+            INSERT INTO shares (user_address, market_id, outcome_id, share_type, amount, avg_cost)
+            VALUES ($1, $2, $3, $4::share_type, $5, $6)
+            ON CONFLICT (user_address, outcome_id) DO UPDATE SET
+                amount = shares.amount + $5,
+                avg_cost = (shares.avg_cost * shares.amount + $6 * $5) / (shares.amount + $5),
+                updated_at = NOW()
+            "#
+        )
+        .bind(buyer_address)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(trade.share_type.to_string())
+        .bind(trade.amount)
+        .bind(trade.price)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Update shares for mint trade (create new shares)
+    async fn update_shares_mint(pool: &PgPool, trade: &TradeEvent) -> Result<(), sqlx::Error> {
+        // Both parties are buyers - each gets shares of their respective type
+        // Maker gets shares of the complement type (since match was cross-outcome)
+        let maker_share_type = trade.share_type.complement();
+        let taker_share_type = trade.share_type.clone();
+
+        // Maker gets complement shares
+        sqlx::query(
+            r#"
+            INSERT INTO shares (user_address, market_id, outcome_id, share_type, amount, avg_cost)
+            VALUES ($1, $2, $3, $4::share_type, $5, $6)
+            ON CONFLICT (user_address, outcome_id) DO UPDATE SET
+                amount = shares.amount + $5,
+                avg_cost = (shares.avg_cost * shares.amount + $6 * $5) / (shares.amount + $5),
+                updated_at = NOW()
+            "#
+        )
+        .bind(&trade.maker_address)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(maker_share_type.to_string())
+        .bind(trade.amount)
+        .bind(Decimal::ONE - trade.price)  // Complement price
+        .execute(pool)
+        .await?;
+
+        // Taker gets taker's share type
+        sqlx::query(
+            r#"
+            INSERT INTO shares (user_address, market_id, outcome_id, share_type, amount, avg_cost)
+            VALUES ($1, $2, $3, $4::share_type, $5, $6)
+            ON CONFLICT (user_address, outcome_id) DO UPDATE SET
+                amount = shares.amount + $5,
+                avg_cost = (shares.avg_cost * shares.amount + $6 * $5) / (shares.amount + $5),
+                updated_at = NOW()
+            "#
+        )
+        .bind(&trade.taker_address)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(taker_share_type.to_string())
+        .bind(trade.amount)
+        .bind(trade.price)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Update shares for merge trade (redeem shares for collateral)
+    async fn update_shares_merge(pool: &PgPool, trade: &TradeEvent) -> Result<(), sqlx::Error> {
+        // Both parties are sellers - each loses shares, gets collateral back
+        let maker_share_type = trade.share_type.complement();
+        let taker_share_type = trade.share_type.clone();
+
+        // Decrease maker's shares
+        sqlx::query(
+            r#"
+            INSERT INTO shares (user_address, market_id, outcome_id, share_type, amount, avg_cost)
+            VALUES ($1, $2, $3, $4::share_type, -$5, 0)
+            ON CONFLICT (user_address, outcome_id) DO UPDATE SET
+                amount = shares.amount - $5,
+                updated_at = NOW()
+            "#
+        )
+        .bind(&trade.maker_address)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(maker_share_type.to_string())
+        .bind(trade.amount)
+        .execute(pool)
+        .await?;
+
+        // Decrease taker's shares
+        sqlx::query(
+            r#"
+            INSERT INTO shares (user_address, market_id, outcome_id, share_type, amount, avg_cost)
+            VALUES ($1, $2, $3, $4::share_type, -$5, 0)
+            ON CONFLICT (user_address, outcome_id) DO UPDATE SET
+                amount = shares.amount - $5,
+                updated_at = NOW()
+            "#
+        )
+        .bind(&trade.taker_address)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(taker_share_type.to_string())
+        .bind(trade.amount)
+        .execute(pool)
+        .await?;
+
+        // TODO: Credit collateral back to both parties' balances
+        // This should be done through the balance service
+
+        Ok(())
+    }
+
+    /// Record share changes for audit trail
+    async fn record_share_changes(pool: &PgPool, trade: &TradeEvent) -> Result<(), sqlx::Error> {
+        let change_type = match trade.match_type {
+            MatchType::Normal => if trade.side.to_lowercase() == "buy" { "buy" } else { "sell" },
+            MatchType::Mint => "mint",
+            MatchType::Merge => "merge",
+        };
+
+        // Record maker change
+        sqlx::query(
+            r#"
+            INSERT INTO share_changes (
+                user_address, market_id, outcome_id, share_type,
+                change_type, amount, price, trade_id, order_id
+            )
+            VALUES ($1, $2, $3, $4::share_type, $5, $6, $7, $8, $9)
+            "#
+        )
+        .bind(&trade.maker_address)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(trade.share_type.to_string())
+        .bind(change_type)
+        .bind(trade.amount)
+        .bind(trade.price)
+        .bind(trade.trade_id)
         .bind(trade.maker_order_id)
-        .fetch_optional(pool)
+        .execute(pool)
         .await?;
 
-        let taker_leverage: Option<i32> = sqlx::query_scalar(
-            "SELECT leverage FROM orders WHERE id = $1"
+        // Record taker change
+        sqlx::query(
+            r#"
+            INSERT INTO share_changes (
+                user_address, market_id, outcome_id, share_type,
+                change_type, amount, price, trade_id, order_id
+            )
+            VALUES ($1, $2, $3, $4::share_type, $5, $6, $7, $8, $9)
+            "#
         )
+        .bind(&trade.taker_address)
+        .bind(trade.market_id)
+        .bind(trade.outcome_id)
+        .bind(trade.share_type.to_string())
+        .bind(change_type)
+        .bind(trade.amount)
+        .bind(trade.price)
+        .bind(trade.trade_id)
         .bind(trade.taker_order_id)
-        .fetch_optional(pool)
+        .execute(pool)
         .await?;
-
-        info!(
-            "Trade {}: maker_leverage={:?}, taker_leverage={:?}",
-            trade.trade_id, maker_leverage, taker_leverage
-        );
-
-        // 3. Update positions for maker and taker
-        let position_service = PositionService::new(pool.clone());
-
-        // Maker position (opposite side from trade, because maker provides liquidity on the other side)
-        if let Some(leverage) = maker_leverage {
-            info!(
-                "Updating maker position: address={}, symbol={}, leverage={}",
-                trade.maker_address, trade.symbol, leverage
-            );
-            let maker_side = match trade.side.as_str() {
-                "buy" => PositionSide::Short,  // Taker buys, maker sells
-                "sell" => PositionSide::Long,   // Taker sells, maker buys
-                _ => {
-                    warn!("Unknown trade side: {}", trade.side);
-                    return Ok(());
-                }
-            };
-
-            // Calculate collateral (size_in_usd / leverage)
-            let size_in_usd = trade.amount * trade.price;
-            let collateral_amount = size_in_usd / Decimal::from(leverage);
-
-            if let Err(e) = position_service.increase_position(
-                &trade.maker_address,
-                &trade.symbol,
-                maker_side,
-                collateral_amount,
-                leverage,
-                trade.price,
-                true, // Skip min size check - trade already executed
-            ).await {
-                error!(
-                    "Failed to update maker position for {} on {}: {:?}",
-                    trade.maker_address, trade.symbol, e
-                );
-                // Don't fail the trade persistence, just log the error
-            } else {
-                info!(
-                    "✅ Updated maker position for {} on {} (side={:?}, collateral={})",
-                    trade.maker_address, trade.symbol, maker_side, collateral_amount
-                );
-            }
-        } else {
-            warn!(
-                "⚠️ Maker order {} has no leverage, skipping position update",
-                trade.maker_order_id
-            );
-        }
-
-        // Taker position (same side as trade, because taker initiates the trade)
-        if let Some(leverage) = taker_leverage {
-            info!(
-                "Updating taker position: address={}, symbol={}, leverage={}",
-                trade.taker_address, trade.symbol, leverage
-            );
-            let taker_side = match trade.side.as_str() {
-                "buy" => PositionSide::Long,  // Taker buys, opens long
-                "sell" => PositionSide::Short, // Taker sells, opens short
-                _ => {
-                    warn!("Unknown trade side: {}", trade.side);
-                    return Ok(());
-                }
-            };
-
-            // Calculate collateral (size_in_usd / leverage)
-            let size_in_usd = trade.amount * trade.price;
-            let collateral_amount = size_in_usd / Decimal::from(leverage);
-
-            if let Err(e) = position_service.increase_position(
-                &trade.taker_address,
-                &trade.symbol,
-                taker_side,
-                collateral_amount,
-                leverage,
-                trade.price,
-                true, // Skip min size check - trade already executed
-            ).await {
-                error!(
-                    "Failed to update taker position for {} on {}: {:?}",
-                    trade.taker_address, trade.symbol, e
-                );
-                // Don't fail the trade persistence, just log the error
-            } else {
-                info!(
-                    "✅ Updated taker position for {} on {} (side={:?}, collateral={})",
-                    trade.taker_address, trade.symbol, taker_side, collateral_amount
-                );
-            }
-        } else {
-            warn!(
-                "⚠️ Taker order {} has no leverage, skipping position update",
-                trade.taker_order_id
-            );
-        }
-
-        // 4. Handle referral commission
-        // Check if maker has a referrer
-        let maker_referrer: Option<(String, Decimal)> = sqlx::query_as(
-            r#"
-            SELECT rc.owner_address, rc.commission_rate
-            FROM users u
-            JOIN referral_codes rc ON u.referrer_address = rc.owner_address
-            WHERE u.address = $1
-            "#
-        )
-        .bind(&trade.maker_address.to_lowercase())
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some((referrer_address, commission_rate)) = maker_referrer {
-            let commission = maker_fee * commission_rate;
-            sqlx::query(
-                r#"
-                INSERT INTO referral_earnings 
-                (id, referrer_address, referee_address, trade_id, event_type, volume, commission, token, status, created_at)
-                VALUES ($1, $2, $3, $4, 'trade', $5, $6, 'USDT', 'pending', to_timestamp($7::double precision / 1000))
-                "#
-            )
-            .bind(uuid::Uuid::new_v4())
-            .bind(&referrer_address)
-            .bind(&trade.maker_address.to_lowercase())
-            .bind(trade.trade_id)
-            .bind(trade_value)
-            .bind(commission)
-            .bind(trade.timestamp as f64)
-            .execute(pool)
-            .await?;
-
-            debug!("Recorded referral commission {} for maker {} (referrer: {})", commission, trade.maker_address, referrer_address);
-        }
-
-        // Check if taker has a referrer
-        let taker_referrer: Option<(String, Decimal)> = sqlx::query_as(
-            r#"
-            SELECT rc.owner_address, rc.commission_rate
-            FROM users u
-            JOIN referral_codes rc ON u.referrer_address = rc.owner_address
-            WHERE u.address = $1
-            "#
-        )
-        .bind(&trade.taker_address.to_lowercase())
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some((referrer_address, commission_rate)) = taker_referrer {
-            let commission = taker_fee * commission_rate;
-            sqlx::query(
-                r#"
-                INSERT INTO referral_earnings 
-                (id, referrer_address, referee_address, trade_id, event_type, volume, commission, token, status, created_at)
-                VALUES ($1, $2, $3, $4, 'trade', $5, $6, 'USDT', 'pending', to_timestamp($7::double precision / 1000))
-                "#
-            )
-            .bind(uuid::Uuid::new_v4())
-            .bind(&referrer_address)
-            .bind(&trade.taker_address.to_lowercase())
-            .bind(trade.trade_id)
-            .bind(trade_value)
-            .bind(commission)
-            .bind(trade.timestamp as f64)
-            .execute(pool)
-            .await?;
-
-            debug!("Recorded referral commission {} for taker {} (referrer: {})", commission, trade.taker_address, referrer_address);
-        }
 
         Ok(())
     }
@@ -424,14 +493,15 @@ impl OrderFlowOrchestrator {
     /// Persist an order to database
     async fn persist_order(
         pool: &PgPool,
-        symbol: &str,
+        market_id: Uuid,
+        outcome_id: Uuid,
+        share_type: ShareType,
         user_address: &str,
         result: &MatchResult,
         side: Side,
         order_type: OrderType,
         amount: Decimal,
-        price: Option<Decimal>,
-        leverage: u32,
+        price: Decimal,
     ) -> Result<(), sqlx::Error> {
         let status = match result.status {
             OrderStatus::Open => "open",
@@ -441,36 +511,33 @@ impl OrderFlowOrchestrator {
             OrderStatus::Rejected => "rejected",
         };
 
-        let side_str = match side {
-            Side::Buy => "buy",
-            Side::Sell => "sell",
-        };
-
-        let order_type_str = match order_type {
-            OrderType::Limit => "limit",
-            OrderType::Market => "market",
-        };
-
         sqlx::query(
             r#"
-            INSERT INTO orders (id, symbol, user_address, side, order_type, status, price, amount, filled_amount, leverage, created_at)
-            VALUES ($1, $2, $3, $4::order_side, $5::order_type, $6::order_status, $7, $8, $9, $10, NOW())
+            INSERT INTO orders (
+                id, market_id, outcome_id, share_type, user_address,
+                side, order_type, status, price, amount, filled_amount, created_at
+            )
+            VALUES (
+                $1, $2, $3, $4::share_type, $5,
+                $6::order_side, $7::order_type, $8::order_status, $9, $10, $11, NOW()
+            )
             ON CONFLICT (id) DO UPDATE SET
-                status = $6::order_status,
-                filled_amount = $9,
+                status = $8::order_status,
+                filled_amount = $11,
                 updated_at = NOW()
             "#
         )
         .bind(result.order_id)
-        .bind(symbol)
+        .bind(market_id)
+        .bind(outcome_id)
+        .bind(share_type.to_string())
         .bind(user_address)
-        .bind(side_str)
-        .bind(order_type_str)
+        .bind(side.to_string())
+        .bind(order_type.to_string())
         .bind(status)
         .bind(price)
         .bind(amount)
         .bind(result.filled_amount)
-        .bind(leverage as i32)
         .execute(pool)
         .await?;
 
@@ -515,121 +582,9 @@ impl OrderFlowOrchestrator {
         debug!("Updated order status: id={}, status={}", order_id, status);
         Ok(())
     }
-
-    /// Batch persist trades
-    pub async fn batch_persist_trades(pool: &PgPool, trades: &[TradeEvent]) -> Result<usize, sqlx::Error> {
-        if trades.is_empty() {
-            return Ok(0);
-        }
-
-        let mut tx = pool.begin().await?;
-        let mut count = 0;
-
-        for trade in trades {
-            // Calculate fees
-            let trade_value = trade.amount * trade.price;
-            let maker_fee = trade_value * Decimal::from_str_exact("0.0002").unwrap();
-            let taker_fee = trade_value * Decimal::from_str_exact("0.0005").unwrap();
-
-            sqlx::query(
-                r#"
-                INSERT INTO trades (id, symbol, maker_order_id, taker_order_id, maker_address, taker_address, side, price, amount, maker_fee, taker_fee, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7::order_side, $8, $9, $10, $11, to_timestamp($12::double precision / 1000))
-                ON CONFLICT (id, created_at) DO NOTHING
-                "#
-            )
-            .bind(trade.trade_id)
-            .bind(&trade.symbol)
-            .bind(trade.maker_order_id)
-            .bind(trade.taker_order_id)
-            .bind(&trade.maker_address)
-            .bind(&trade.taker_address)
-            .bind(&trade.side)
-            .bind(trade.price)
-            .bind(trade.amount)
-            .bind(maker_fee)
-            .bind(taker_fee)
-            .bind(trade.timestamp as f64)
-            .execute(&mut *tx)
-            .await?;
-
-            // Handle referral commission for maker
-            let maker_referrer: Option<(String, Decimal)> = sqlx::query_as(
-                r#"
-                SELECT rc.owner_address, rc.commission_rate
-                FROM users u
-                JOIN referral_codes rc ON u.referrer_address = rc.owner_address
-                WHERE u.address = $1
-                "#
-            )
-            .bind(&trade.maker_address.to_lowercase())
-            .fetch_optional(&mut *tx)
-            .await?;
-
-            if let Some((referrer_address, commission_rate)) = maker_referrer {
-                let commission = maker_fee * commission_rate;
-                sqlx::query(
-                    r#"
-                    INSERT INTO referral_earnings 
-                    (id, referrer_address, referee_address, trade_id, event_type, volume, commission, token, status, created_at)
-                    VALUES ($1, $2, $3, $4, 'trade', $5, $6, 'USDT', 'pending', to_timestamp($7::double precision / 1000))
-                    "#
-                )
-                .bind(uuid::Uuid::new_v4())
-                .bind(&referrer_address)
-                .bind(&trade.maker_address.to_lowercase())
-                .bind(trade.trade_id)
-                .bind(trade_value)
-                .bind(commission)
-                .bind(trade.timestamp as f64)
-                .execute(&mut *tx)
-                .await?;
-            }
-
-            // Handle referral commission for taker
-            let taker_referrer: Option<(String, Decimal)> = sqlx::query_as(
-                r#"
-                SELECT rc.owner_address, rc.commission_rate
-                FROM users u
-                JOIN referral_codes rc ON u.referrer_address = rc.owner_address
-                WHERE u.address = $1
-                "#
-            )
-            .bind(&trade.taker_address.to_lowercase())
-            .fetch_optional(&mut *tx)
-            .await?;
-
-            if let Some((referrer_address, commission_rate)) = taker_referrer {
-                let commission = taker_fee * commission_rate;
-                sqlx::query(
-                    r#"
-                    INSERT INTO referral_earnings 
-                    (id, referrer_address, referee_address, trade_id, event_type, volume, commission, token, status, created_at)
-                    VALUES ($1, $2, $3, $4, 'trade', $5, $6, 'USDT', 'pending', to_timestamp($7::double precision / 1000))
-                    "#
-                )
-                .bind(uuid::Uuid::new_v4())
-                .bind(&referrer_address)
-                .bind(&trade.taker_address.to_lowercase())
-                .bind(trade.trade_id)
-                .bind(trade_value)
-                .bind(commission)
-                .bind(trade.timestamp as f64)
-                .execute(&mut *tx)
-                .await?;
-            }
-
-            count += 1;
-        }
-
-        tx.commit().await?;
-        info!("Batch persisted {} trades", count);
-        Ok(count)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     // Integration tests would require a database connection
-    // Unit tests are in engine.rs
 }

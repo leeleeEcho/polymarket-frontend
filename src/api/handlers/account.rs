@@ -1,23 +1,27 @@
-//! Account API Handlers
+//! Account API Handlers for Prediction Markets
 //!
-//! Phase 9: Complete account data layer with real database queries
+//! Provides endpoints for user profile, balances, shares, orders, and trades.
 
 use axum::{
     extract::{Query, State},
     http::StatusCode,
     Extension, Json,
 };
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize, Serializer};
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
+use crate::models::market::ShareType;
 use crate::models::{BalanceResponse, UserProfile};
 use crate::AppState;
 
-// Helper module to serialize DateTime as milliseconds timestamp
+// ============================================================================
+// Helper Modules
+// ============================================================================
+
 mod datetime_as_millis {
     use chrono::{DateTime, Utc};
     use serde::Serializer;
@@ -30,26 +34,30 @@ mod datetime_as_millis {
     }
 }
 
+// ============================================================================
+// Response Types
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct ErrorResponse {
+    pub error: String,
+    pub code: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct BalancesResponse {
     pub balances: Vec<BalanceResponse>,
 }
 
-/// Simplified position response for API
+/// User's share holdings in prediction markets
 #[derive(Debug, Serialize)]
-pub struct PositionDetail {
+pub struct ShareDetail {
     pub id: Uuid,
-    pub symbol: String,
-    pub side: String,
-    pub size: Decimal,
-    pub entry_price: Decimal,
-    pub mark_price: Decimal,
-    pub liquidation_price: Decimal,
-    pub collateral_amount: Decimal,
-    pub leverage: i32,
-    pub unrealized_pnl: Decimal,
-    pub realized_pnl: Decimal,
-    pub margin_ratio: Decimal,
+    pub market_id: Uuid,
+    pub outcome_id: Uuid,
+    pub share_type: ShareType,
+    pub amount: Decimal,
+    pub avg_cost: Decimal,
     #[serde(serialize_with = "datetime_as_millis::serialize")]
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "datetime_as_millis::serialize")]
@@ -57,34 +65,23 @@ pub struct PositionDetail {
 }
 
 #[derive(Debug, Serialize)]
-pub struct PositionsResponse {
-    pub positions: Vec<PositionDetail>,
-    pub total_unrealized_pnl: Decimal,
-    pub total_collateral: Decimal,
+pub struct SharesResponse {
+    pub shares: Vec<ShareDetail>,
+    pub total_value: Decimal,
 }
 
-#[derive(Debug, Serialize)]
-pub struct OrdersResponse {
-    pub orders: Vec<OrderDetail>,
-    pub total: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TradesResponse {
-    pub trades: Vec<TradeRecord>,
-    pub total: i64,
-}
-
+/// Order detail for prediction markets
 #[derive(Debug, Serialize)]
 pub struct OrderDetail {
     pub id: Uuid,
-    pub symbol: String,
+    pub market_id: Uuid,
+    pub outcome_id: Uuid,
+    pub share_type: ShareType,
     pub side: String,
     pub order_type: String,
-    pub price: Decimal,  // Changed from Option<Decimal> to Decimal - price must never be null
+    pub price: Decimal,
     pub amount: Decimal,
     pub filled_amount: Decimal,
-    pub leverage: i32,
     pub status: String,
     #[serde(serialize_with = "datetime_as_millis::serialize")]
     pub created_at: DateTime<Utc>,
@@ -93,22 +90,39 @@ pub struct OrderDetail {
 }
 
 #[derive(Debug, Serialize)]
+pub struct OrdersResponse {
+    pub orders: Vec<OrderDetail>,
+    pub total: i64,
+}
+
+/// Trade record for prediction markets
+#[derive(Debug, Serialize)]
 pub struct TradeRecord {
     pub id: Uuid,
-    pub order_id: Uuid,
-    pub symbol: String,
+    pub market_id: Uuid,
+    pub outcome_id: Uuid,
+    pub share_type: ShareType,
     pub side: String,
     pub price: Decimal,
     pub amount: Decimal,
     pub fee: Decimal,
-    pub realized_pnl: Decimal,
     #[serde(serialize_with = "datetime_as_millis::serialize")]
     pub timestamp: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct TradesResponse {
+    pub trades: Vec<TradeRecord>,
+    pub total: i64,
+}
+
+// ============================================================================
+// Query Parameters
+// ============================================================================
+
 #[derive(Debug, Deserialize)]
 pub struct OrdersQuery {
-    pub symbol: Option<String>,
+    pub market_id: Option<Uuid>,
     pub status: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -116,16 +130,14 @@ pub struct OrdersQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct TradesQuery {
-    pub symbol: Option<String>,
+    pub market_id: Option<Uuid>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-    pub code: String,
-}
+// ============================================================================
+// Handlers
+// ============================================================================
 
 /// Get user profile
 /// GET /account/profile
@@ -133,17 +145,12 @@ pub async fn get_profile(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
 ) -> Result<Json<UserProfile>, (StatusCode, Json<ErrorResponse>)> {
-    // Try to fetch from database using tuple query
-    let user: Option<(String, Option<String>, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+    let user: Option<UserProfile> = sqlx::query_as(
         r#"
-        SELECT
-            address,
-            referral_code,
-            referrer_address,
-            created_at
+        SELECT address, username, avatar_url, created_at, updated_at
         FROM users
         WHERE address = $1
-        "#
+        "#,
     )
     .bind(&auth_user.address.to_lowercase())
     .fetch_optional(&state.db.pool)
@@ -153,38 +160,21 @@ pub async fn get_profile(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: "获取用户信息失败".to_string(),
+                error: "获取用户资料失败".to_string(),
                 code: "PROFILE_FETCH_FAILED".to_string(),
             }),
         )
     })?;
 
-    // If user doesn't exist, create a new one
-    if let Some((address, referral_code, referrer_address, created_at)) = user {
-        Ok(Json(UserProfile {
-            address,
-            referral_code,
-            referrer_address,
-            created_at,
-        }))
-    } else {
-        // Auto-create user record
-        let now = Utc::now();
-        sqlx::query(
-            "INSERT INTO users (address, created_at) VALUES ($1, $2) ON CONFLICT (address) DO NOTHING"
-        )
-        .bind(&auth_user.address.to_lowercase())
-        .bind(now)
-        .execute(&state.db.pool)
-        .await
-        .ok();
-
-        Ok(Json(UserProfile {
-            address: auth_user.address.to_lowercase(),
-            referral_code: None,
-            referrer_address: None,
-            created_at: now,
-        }))
+    match user {
+        Some(profile) => Ok(Json(profile)),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "用户不存在".to_string(),
+                code: "USER_NOT_FOUND".to_string(),
+            }),
+        )),
     }
 }
 
@@ -194,9 +184,13 @@ pub async fn get_balances(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
 ) -> Result<Json<BalancesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Fetch balances from database
     let rows: Vec<(String, Decimal, Decimal)> = sqlx::query_as(
-        "SELECT token, available, frozen FROM balances WHERE user_address = $1"
+        r#"
+        SELECT token, available, frozen
+        FROM balances
+        WHERE user_address = $1
+        ORDER BY token
+        "#,
     )
     .bind(&auth_user.address.to_lowercase())
     .fetch_all(&state.db.pool)
@@ -214,254 +208,109 @@ pub async fn get_balances(
 
     let balances: Vec<BalanceResponse> = rows
         .into_iter()
-        .map(|(token, available, frozen)| {
-            BalanceResponse {
-                token,
-                available,
-                frozen,
-                total: available + frozen,
-            }
+        .map(|(token, available, frozen)| BalanceResponse {
+            token,
+            available,
+            frozen,
+            total: available + frozen,
         })
         .collect();
 
     Ok(Json(BalancesResponse { balances }))
 }
 
-/// Get user positions
-/// GET /account/positions
-pub async fn get_positions(
-    State(state): State<Arc<AppState>>,
-    Extension(auth_user): Extension<AuthUser>,
-) -> Result<Json<PositionsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Fetch open positions from database - use size_in_usd and collateral_amount for GMX-style schema
-    let rows: Vec<(Uuid, String, String, Decimal, Decimal, Decimal, i32, Decimal, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(
-        r#"
-        SELECT
-            id, symbol, side::text, size_in_usd, entry_price,
-            collateral_amount, leverage, realized_pnl,
-            created_at, updated_at
-        FROM positions
-        WHERE user_address = $1 AND status = 'open'
-        ORDER BY created_at DESC
-        "#
-    )
-    .bind(&auth_user.address.to_lowercase())
-    .fetch_all(&state.db.pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to fetch positions: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "获取仓位失败".to_string(),
-                code: "POSITION_FETCH_FAILED".to_string(),
-            }),
-        )
-    })?;
-
-    let mut positions = Vec::new();
-    let mut total_unrealized_pnl = Decimal::ZERO;
-    let mut total_collateral = Decimal::ZERO;
-
-    for (id, symbol, side, size, entry_price, collateral, leverage, realized_pnl, created_at, updated_at) in rows {
-        // Get current mark price
-        let mark_price = state.price_feed_service
-            .get_mark_price(&symbol)
-            .await
-            .unwrap_or(entry_price);
-
-        // Calculate unrealized PnL
-        let is_long = side.to_lowercase() == "long";
-        let size_in_tokens = if entry_price > Decimal::ZERO {
-            size / entry_price
-        } else {
-            Decimal::ZERO
-        };
-
-        let unrealized_pnl = if is_long {
-            (mark_price - entry_price) * size_in_tokens
-        } else {
-            (entry_price - mark_price) * size_in_tokens
-        };
-
-        // Calculate liquidation price
-        let position_value = size;
-        let maintenance_margin = position_value * Decimal::new(5, 3); // 0.5%
-        let liq_distance = if size_in_tokens > Decimal::ZERO {
-            (collateral - maintenance_margin) / size_in_tokens
-        } else {
-            Decimal::ZERO
-        };
-
-        let liquidation_price = if is_long {
-            entry_price - liq_distance
-        } else {
-            entry_price + liq_distance
-        };
-
-        // Calculate margin ratio (collateral / position_value)
-        let margin_ratio = if position_value > Decimal::ZERO {
-            collateral / position_value
-        } else {
-            Decimal::ZERO
-        };
-
-        // Accumulate totals
-        total_unrealized_pnl += unrealized_pnl;
-        total_collateral += collateral;
-
-        positions.push(PositionDetail {
-            id,
-            symbol,
-            side,
-            size,
-            entry_price,
-            mark_price,
-            liquidation_price: liquidation_price.max(Decimal::ZERO),
-            collateral_amount: collateral,
-            leverage,
-            unrealized_pnl,
-            realized_pnl,
-            margin_ratio,
-            created_at,
-            updated_at,
-        });
-    }
-
-    Ok(Json(PositionsResponse { 
-        positions,
-        total_unrealized_pnl,
-        total_collateral,
-    }))
-}
-
-/// Get user orders with filtering
+/// Get user orders
 /// GET /account/orders
 pub async fn get_orders(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Query(query): Query<OrdersQuery>,
 ) -> Result<Json<OrdersResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let limit = query.limit.unwrap_or(50).min(200);
+    let limit = query.limit.unwrap_or(50).min(100);
     let offset = query.offset.unwrap_or(0);
-    let user_address = auth_user.address.to_lowercase();
 
-    // Build dynamic query based on filters
-    // Cast ENUM types to TEXT to avoid sqlx decode errors
-    // Use COALESCE to ensure price is never null (use 0 as fallback for market orders)
+    // Build query with optional filters
     let mut sql = String::from(
         r#"
-        SELECT
-            id, symbol, side::TEXT, order_type::TEXT, 
-            COALESCE(price, 0) as price, amount,
-            filled_amount, leverage, status::TEXT, created_at, updated_at
+        SELECT id, market_id, outcome_id, share_type::text, side::text, order_type::text,
+               price, amount, filled_amount, status::text, created_at, updated_at
         FROM orders
         WHERE user_address = $1
-        "#
+        "#,
     );
-    let mut count_sql = String::from("SELECT COUNT(*) FROM orders WHERE user_address = $1");
 
-    let mut param_idx = 2;
-    let mut conditions = Vec::new();
-
-    if query.symbol.is_some() {
-        conditions.push(format!("AND symbol = ${}", param_idx));
-        param_idx += 1;
+    if query.market_id.is_some() {
+        sql.push_str(" AND market_id = $4");
     }
-
     if query.status.is_some() {
-        // 需要显式转换为 order_status ENUM 类型
-        conditions.push(format!("AND status = ${}::order_status", param_idx));
-        param_idx += 1;
+        sql.push_str(" AND status::text = $5");
     }
 
-    for cond in &conditions {
-        sql.push(' ');
-        sql.push_str(cond);
-        count_sql.push(' ');
-        count_sql.push_str(cond);
+    sql.push_str(" ORDER BY created_at DESC LIMIT $2 OFFSET $3");
+
+    // Execute query
+    let rows: Vec<(
+        Uuid,
+        Uuid,
+        Uuid,
+        String,
+        String,
+        String,
+        Decimal,
+        Decimal,
+        Decimal,
+        String,
+        DateTime<Utc>,
+        DateTime<Utc>,
+    )> = if query.market_id.is_some() && query.status.is_some() {
+        sqlx::query_as(&sql)
+            .bind(&auth_user.address.to_lowercase())
+            .bind(limit)
+            .bind(offset)
+            .bind(query.market_id.unwrap())
+            .bind(query.status.as_ref().unwrap())
+            .fetch_all(&state.db.pool)
+            .await
+    } else if query.market_id.is_some() {
+        sqlx::query_as(&sql)
+            .bind(&auth_user.address.to_lowercase())
+            .bind(limit)
+            .bind(offset)
+            .bind(query.market_id.unwrap())
+            .fetch_all(&state.db.pool)
+            .await
+    } else if query.status.is_some() {
+        // Need to adjust SQL for this case
+        let sql = r#"
+            SELECT id, market_id, outcome_id, share_type::text, side::text, order_type::text,
+                   price, amount, filled_amount, status::text, created_at, updated_at
+            FROM orders
+            WHERE user_address = $1 AND status::text = $4
+            ORDER BY created_at DESC LIMIT $2 OFFSET $3
+        "#;
+        sqlx::query_as(sql)
+            .bind(&auth_user.address.to_lowercase())
+            .bind(limit)
+            .bind(offset)
+            .bind(query.status.as_ref().unwrap())
+            .fetch_all(&state.db.pool)
+            .await
+    } else {
+        let sql = r#"
+            SELECT id, market_id, outcome_id, share_type::text, side::text, order_type::text,
+                   price, amount, filled_amount, status::text, created_at, updated_at
+            FROM orders
+            WHERE user_address = $1
+            ORDER BY created_at DESC LIMIT $2 OFFSET $3
+        "#;
+        sqlx::query_as(sql)
+            .bind(&auth_user.address.to_lowercase())
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.db.pool)
+            .await
     }
-
-    sql.push_str(" ORDER BY created_at DESC LIMIT $");
-    sql.push_str(&param_idx.to_string());
-    sql.push_str(" OFFSET $");
-    sql.push_str(&(param_idx + 1).to_string());
-
-    // Execute count query
-    let total = match (&query.symbol, &query.status) {
-        (Some(symbol), Some(status)) => {
-            sqlx::query_scalar::<_, i64>(&count_sql)
-                .bind(&user_address)
-                .bind(symbol)
-                .bind(status)
-                .fetch_one(&state.db.pool)
-                .await
-                .unwrap_or(0)
-        }
-        (Some(symbol), None) => {
-            sqlx::query_scalar::<_, i64>(&count_sql)
-                .bind(&user_address)
-                .bind(symbol)
-                .fetch_one(&state.db.pool)
-                .await
-                .unwrap_or(0)
-        }
-        (None, Some(status)) => {
-            sqlx::query_scalar::<_, i64>(&count_sql)
-                .bind(&user_address)
-                .bind(status)
-                .fetch_one(&state.db.pool)
-                .await
-                .unwrap_or(0)
-        }
-        (None, None) => {
-            sqlx::query_scalar::<_, i64>(&count_sql)
-                .bind(&user_address)
-                .fetch_one(&state.db.pool)
-                .await
-                .unwrap_or(0)
-        }
-    };
-
-    // Execute main query
-    let rows: Vec<(Uuid, String, String, String, Decimal, Decimal, Decimal, i32, String, DateTime<Utc>, DateTime<Utc>)> = match (&query.symbol, &query.status) {
-        (Some(symbol), Some(status)) => {
-            sqlx::query_as(&sql)
-                .bind(&user_address)
-                .bind(symbol)
-                .bind(status)
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(&state.db.pool)
-                .await
-        }
-        (Some(symbol), None) => {
-            sqlx::query_as(&sql)
-                .bind(&user_address)
-                .bind(symbol)
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(&state.db.pool)
-                .await
-        }
-        (None, Some(status)) => {
-            sqlx::query_as(&sql)
-                .bind(&user_address)
-                .bind(status)
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(&state.db.pool)
-                .await
-        }
-        (None, None) => {
-            sqlx::query_as(&sql)
-                .bind(&user_address)
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(&state.db.pool)
-                .await
-        }
-    }.map_err(|e| {
+    .map_err(|e| {
         tracing::error!("Failed to fetch orders: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -474,124 +323,109 @@ pub async fn get_orders(
 
     let orders: Vec<OrderDetail> = rows
         .into_iter()
-        .map(|(id, symbol, side, order_type, price, amount, filled_amount, leverage, status, created_at, updated_at)| {
-            OrderDetail {
+        .map(
+            |(
                 id,
-                symbol,
+                market_id,
+                outcome_id,
+                share_type,
                 side,
                 order_type,
                 price,
                 amount,
                 filled_amount,
-                leverage,
                 status,
                 created_at,
                 updated_at,
-            }
-        })
+            )| {
+                OrderDetail {
+                    id,
+                    market_id,
+                    outcome_id,
+                    share_type: share_type.parse().unwrap_or(ShareType::Yes),
+                    side,
+                    order_type,
+                    price,
+                    amount,
+                    filled_amount,
+                    status,
+                    created_at,
+                    updated_at,
+                }
+            },
+        )
         .collect();
+
+    let total = orders.len() as i64;
 
     Ok(Json(OrdersResponse { orders, total }))
 }
 
-/// Get user trades history
+/// Get user trades
 /// GET /account/trades
 pub async fn get_trades(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Query(query): Query<TradesQuery>,
 ) -> Result<Json<TradesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let limit = query.limit.unwrap_or(50).min(200);
+    let limit = query.limit.unwrap_or(50).min(100);
     let offset = query.offset.unwrap_or(0);
     let user_address = auth_user.address.to_lowercase();
 
-    // Build query based on filters
-    // Note: trades table has maker_order_id/taker_order_id, maker_fee/taker_fee
-    // 需要将 ENUM 类型转换为 TEXT 进行比较和返回
-    let (sql, count_sql) = if query.symbol.is_some() {
-        (
+    let rows: Vec<(
+        Uuid,
+        Uuid,
+        Uuid,
+        String,
+        String,
+        Decimal,
+        Decimal,
+        Decimal,
+        DateTime<Utc>,
+    )> = if let Some(market_id) = query.market_id {
+        sqlx::query_as(
             r#"
-            SELECT
-                t.id,
-                CASE WHEN t.maker_address = $1 THEN t.maker_order_id ELSE t.taker_order_id END as order_id,
-                t.symbol,
-                CASE WHEN t.maker_address = $1 THEN t.side::TEXT ELSE
-                    CASE WHEN t.side::TEXT = 'buy' THEN 'sell' ELSE 'buy' END
-                END as side,
-                t.price,
-                t.amount,
-                CASE WHEN t.maker_address = $1 THEN t.maker_fee ELSE t.taker_fee END as fee,
-                COALESCE(0::DECIMAL, 0::DECIMAL) as realized_pnl,
-                t.created_at
-            FROM trades t
-            WHERE (t.maker_address = $1 OR t.taker_address = $1) AND t.symbol = $2
-            ORDER BY t.created_at DESC
-            LIMIT $3 OFFSET $4
-            "#,
-            "SELECT COUNT(*) FROM trades WHERE (maker_address = $1 OR taker_address = $1) AND symbol = $2"
-        )
-    } else {
-        (
-            r#"
-            SELECT
-                t.id,
-                CASE WHEN t.maker_address = $1 THEN t.maker_order_id ELSE t.taker_order_id END as order_id,
-                t.symbol,
-                CASE WHEN t.maker_address = $1 THEN t.side::TEXT ELSE
-                    CASE WHEN t.side::TEXT = 'buy' THEN 'sell' ELSE 'buy' END
-                END as side,
-                t.price,
-                t.amount,
-                CASE WHEN t.maker_address = $1 THEN t.maker_fee ELSE t.taker_fee END as fee,
-                COALESCE(0::DECIMAL, 0::DECIMAL) as realized_pnl,
-                t.created_at
-            FROM trades t
-            WHERE t.maker_address = $1 OR t.taker_address = $1
-            ORDER BY t.created_at DESC
+            SELECT id, market_id, outcome_id, share_type::text, side::text,
+                   price, amount,
+                   CASE WHEN maker_address = $1 THEN maker_fee ELSE taker_fee END as fee,
+                   created_at
+            FROM trades
+            WHERE (maker_address = $1 OR taker_address = $1) AND market_id = $4
+            ORDER BY created_at DESC
             LIMIT $2 OFFSET $3
             "#,
-            "SELECT COUNT(*) FROM trades WHERE maker_address = $1 OR taker_address = $1"
         )
-    };
-
-    // Get total count
-    let total = if let Some(ref symbol) = query.symbol {
-        sqlx::query_scalar::<_, i64>(count_sql)
-            .bind(&user_address)
-            .bind(symbol)
-            .fetch_one(&state.db.pool)
-            .await
-            .unwrap_or(0)
+        .bind(&user_address)
+        .bind(limit)
+        .bind(offset)
+        .bind(market_id)
+        .fetch_all(&state.db.pool)
+        .await
     } else {
-        sqlx::query_scalar::<_, i64>(count_sql)
-            .bind(&user_address)
-            .fetch_one(&state.db.pool)
-            .await
-            .unwrap_or(0)
-    };
-
-    // Fetch trades
-    let rows: Vec<(Uuid, Uuid, String, String, Decimal, Decimal, Decimal, Decimal, DateTime<Utc>)> = if let Some(ref symbol) = query.symbol {
-        sqlx::query_as(sql)
-            .bind(&user_address)
-            .bind(symbol)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db.pool)
-            .await
-    } else {
-        sqlx::query_as(sql)
-            .bind(&user_address)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db.pool)
-            .await
-    }.map_err(|e| {
+        sqlx::query_as(
+            r#"
+            SELECT id, market_id, outcome_id, share_type::text, side::text,
+                   price, amount,
+                   CASE WHEN maker_address = $1 THEN maker_fee ELSE taker_fee END as fee,
+                   created_at
+            FROM trades
+            WHERE maker_address = $1 OR taker_address = $1
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(&user_address)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.db.pool)
+        .await
+    }
+    .map_err(|e| {
         tracing::error!("Failed to fetch trades: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: "获取交易历史失败".to_string(),
+                error: "获取交易记录失败".to_string(),
                 code: "TRADE_FETCH_FAILED".to_string(),
             }),
         )
@@ -599,20 +433,24 @@ pub async fn get_trades(
 
     let trades: Vec<TradeRecord> = rows
         .into_iter()
-        .map(|(id, order_id, symbol, side, price, amount, fee, realized_pnl, timestamp)| {
-            TradeRecord {
-                id,
-                order_id,
-                symbol,
-                side,
-                price,
-                amount,
-                fee,
-                realized_pnl,
-                timestamp,
-            }
-        })
+        .map(
+            |(id, market_id, outcome_id, share_type, side, price, amount, fee, timestamp)| {
+                TradeRecord {
+                    id,
+                    market_id,
+                    outcome_id,
+                    share_type: share_type.parse().unwrap_or(ShareType::Yes),
+                    side,
+                    price,
+                    amount,
+                    fee,
+                    timestamp,
+                }
+            },
+        )
         .collect();
+
+    let total = trades.len() as i64;
 
     Ok(Json(TradesResponse { trades, total }))
 }

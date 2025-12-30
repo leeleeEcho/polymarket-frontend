@@ -55,17 +55,18 @@
 
 pub mod keys;
 pub mod orderbook_cache;
-pub mod position_cache;
 pub mod price_cache;
 pub mod pubsub;
 pub mod redis_client;
 pub mod user_cache;
 
+// TODO: Implement share_cache for prediction markets
+// pub mod share_cache;
+
 use std::sync::Arc;
 
 // Re-exports for convenience (only export what's commonly used externally)
 pub use orderbook_cache::OrderbookCache;
-pub use position_cache::PositionCache;
 pub use price_cache::PriceCache;
 pub use pubsub::PubSubManager;
 pub use redis_client::{RedisClient, RedisConfig};
@@ -130,7 +131,6 @@ pub struct CacheManager {
     price_cache: Option<PriceCache>,
     orderbook_cache: Option<OrderbookCache>,
     user_cache: Option<UserCache>,
-    position_cache: Option<PositionCache>,
     pubsub_manager: Option<PubSubManager>,
 }
 
@@ -145,7 +145,6 @@ impl CacheManager {
                 price_cache: None,
                 orderbook_cache: None,
                 user_cache: None,
-                position_cache: None,
                 pubsub_manager: None,
             });
         }
@@ -167,7 +166,6 @@ impl CacheManager {
                 let orderbook_cache =
                     OrderbookCache::with_depth(Arc::clone(&redis), config.orderbook_depth);
                 let user_cache = UserCache::new(Arc::clone(&redis));
-                let position_cache = PositionCache::new(Arc::clone(&redis));
                 let pubsub_manager = PubSubManager::new(Arc::clone(&redis), &config.redis_url);
 
                 tracing::info!("Cache manager initialized with Redis at {}", config.redis_url);
@@ -178,7 +176,6 @@ impl CacheManager {
                     price_cache: Some(price_cache),
                     orderbook_cache: Some(orderbook_cache),
                     user_cache: Some(user_cache),
-                    position_cache: Some(position_cache),
                     pubsub_manager: Some(pubsub_manager),
                 })
             }
@@ -192,7 +189,6 @@ impl CacheManager {
                     price_cache: None,
                     orderbook_cache: None,
                     user_cache: None,
-                    position_cache: None,
                     pubsub_manager: None,
                 })
             }
@@ -260,18 +256,6 @@ impl CacheManager {
     /// Get user cache if available
     pub fn user_opt(&self) -> Option<&UserCache> {
         self.user_cache.as_ref()
-    }
-
-    /// Get position cache
-    pub fn position(&self) -> &PositionCache {
-        self.position_cache.as_ref().unwrap_or_else(|| {
-            panic!("Position cache not available - Redis is not connected")
-        })
-    }
-
-    /// Get position cache if available
-    pub fn position_opt(&self) -> Option<&PositionCache> {
-        self.position_cache.as_ref()
     }
 
     /// Get pub/sub manager

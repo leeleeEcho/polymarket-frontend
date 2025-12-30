@@ -1,8 +1,9 @@
 //! Orderbook Implementation
 //!
-//! High-performance orderbook with lock-free concurrent access.
+//! High-performance orderbook for prediction markets with lock-free concurrent access.
 
 use super::types::*;
+use crate::models::market::ShareType;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rust_decimal::Decimal;
@@ -10,9 +11,16 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 use uuid::Uuid;
 
-/// A single market orderbook with concurrent access support
+/// A single orderbook for a specific market outcome (Yes or No shares)
 pub struct Orderbook {
-    pub symbol: String,
+    /// Market ID
+    pub market_id: Uuid,
+
+    /// Outcome ID
+    pub outcome_id: Uuid,
+
+    /// Share type (Yes/No)
+    pub share_type: ShareType,
 
     /// Bids sorted by price descending (highest first)
     /// Using RwLock for price level operations
@@ -32,10 +40,18 @@ pub struct Orderbook {
 }
 
 impl Orderbook {
-    /// Create a new orderbook for a symbol
-    pub fn new(symbol: String) -> Self {
+    /// Create a new orderbook for a market outcome
+    /// Accepts either a market_key string (format: market_id:outcome_id:share_type)
+    /// or uses provided values directly
+    pub fn new(market_key: String) -> Self {
+        // Parse market_key to extract components
+        let (market_id, outcome_id, share_type) = Self::parse_market_key(&market_key)
+            .unwrap_or((Uuid::nil(), Uuid::nil(), ShareType::Yes));
+
         Self {
-            symbol,
+            market_id,
+            outcome_id,
+            share_type,
             bids: RwLock::new(BTreeMap::new()),
             asks: RwLock::new(BTreeMap::new()),
             order_index: DashMap::new(),
@@ -44,9 +60,32 @@ impl Orderbook {
         }
     }
 
-    /// Get the symbol
-    pub fn symbol(&self) -> &str {
-        &self.symbol
+    /// Parse market_key into components
+    fn parse_market_key(market_key: &str) -> Option<(Uuid, Uuid, ShareType)> {
+        let parts: Vec<&str> = market_key.split(':').collect();
+        if parts.len() != 3 {
+            // For legacy symbol format (e.g., "BTCUSDT"), return nil UUIDs
+            return None;
+        }
+        let market_id = Uuid::parse_str(parts[0]).ok()?;
+        let outcome_id = Uuid::parse_str(parts[1]).ok()?;
+        let share_type: ShareType = parts[2].parse().ok()?;
+        Some((market_id, outcome_id, share_type))
+    }
+
+    /// Get the market ID
+    pub fn market_id(&self) -> Uuid {
+        self.market_id
+    }
+
+    /// Get the outcome ID
+    pub fn outcome_id(&self) -> Uuid {
+        self.outcome_id
+    }
+
+    /// Get the share type
+    pub fn share_type(&self) -> ShareType {
+        self.share_type
     }
 
     /// Get total order count
@@ -66,8 +105,8 @@ impl Orderbook {
 
     /// Set last trade price
     pub fn set_last_trade_price(&self, price: Decimal) {
-        let raw = (price * Decimal::from(100_000_000)).to_string().parse::<i64>().unwrap_or(0);
-        self.last_trade_price.store(raw, AtomicOrdering::Relaxed);
+        let level = PriceLevel::from_decimal(price);
+        self.last_trade_price.store(level.raw(), AtomicOrdering::Relaxed);
     }
 
     /// Get best bid price
@@ -90,8 +129,25 @@ impl Orderbook {
         }
     }
 
+    /// Validate price is within valid range for prediction markets (0 < price < 1)
+    fn validate_price(&self, price: Decimal) -> Result<(), MatchingError> {
+        if price <= Decimal::ZERO || price >= Decimal::ONE {
+            return Err(MatchingError::InvalidPrice(format!(
+                "Price {} must be between 0 and 1 (exclusive)",
+                price
+            )));
+        }
+        Ok(())
+    }
+
     /// Add an order to the orderbook
-    pub fn add_order(&self, entry: OrderEntry) {
+    pub fn add_order(&self, entry: OrderEntry) -> Result<(), MatchingError> {
+        // Validate price
+        self.validate_price(entry.price)?;
+
+        // Note: Market/outcome validation is done at the engine level when looking up orderbook
+        // The orderbook is already specific to a market:outcome:share_type combination
+
         let price_level = PriceLevel::from_decimal(entry.price);
         let side = entry.side;
         let order_id = entry.id;
@@ -115,6 +171,8 @@ impl Orderbook {
         // Add to index
         self.order_index.insert(order_id, (side, price_level));
         self.order_count.fetch_add(1, AtomicOrdering::Relaxed);
+
+        Ok(())
     }
 
     /// Cancel an order by ID
@@ -167,8 +225,12 @@ impl Orderbook {
         entry
     }
 
-    /// Match an incoming order against the orderbook
+    /// Match an incoming order against the orderbook (Normal matching)
     /// Returns (trades, remaining_amount)
+    ///
+    /// Normal matching: Same share type, opposite sides
+    /// - Buy order matches against Sell orders
+    /// - Sell order matches against Buy orders
     pub fn match_order(
         &self,
         taker_order_id: Uuid,
@@ -210,13 +272,16 @@ impl Orderbook {
                             let trade_amount = amount.min(maker.remaining_amount);
                             let trade_price = maker.price;
 
-                            // Calculate fees
-                            let trade_value = trade_amount * trade_price;
-                            let maker_fee = trade_value * fee_config.maker_fee_rate;
-                            let taker_fee = trade_value * fee_config.taker_fee_rate;
+                            // Calculate symmetric fees for prediction market
+                            let maker_fee = fee_config.calculate_maker_fee(trade_price, trade_amount);
+                            let taker_fee = fee_config.calculate_taker_fee(trade_price, trade_amount);
 
                             let trade = TradeExecution {
                                 trade_id: Uuid::new_v4(),
+                                market_id: self.market_id,
+                                outcome_id: self.outcome_id,
+                                share_type: self.share_type,
+                                match_type: MatchType::Normal,
                                 maker_order_id: maker.id,
                                 taker_order_id,
                                 maker_address: maker.user_address.clone(),
@@ -277,13 +342,16 @@ impl Orderbook {
                             let trade_amount = amount.min(maker.remaining_amount);
                             let trade_price = maker.price;
 
-                            // Calculate fees
-                            let trade_value = trade_amount * trade_price;
-                            let maker_fee = trade_value * fee_config.maker_fee_rate;
-                            let taker_fee = trade_value * fee_config.taker_fee_rate;
+                            // Calculate symmetric fees for prediction market
+                            let maker_fee = fee_config.calculate_maker_fee(trade_price, trade_amount);
+                            let taker_fee = fee_config.calculate_taker_fee(trade_price, trade_amount);
 
                             let trade = TradeExecution {
                                 trade_id: Uuid::new_v4(),
+                                market_id: self.market_id,
+                                outcome_id: self.outcome_id,
+                                share_type: self.share_type,
+                                match_type: MatchType::Normal,
                                 maker_order_id: maker.id,
                                 taker_order_id,
                                 maker_address: maker.user_address.clone(),
@@ -345,7 +413,7 @@ impl Orderbook {
         }
 
         OrderbookSnapshot {
-            symbol: self.symbol.clone(),
+            symbol: format!("{}:{}:{}", self.market_id, self.outcome_id, self.share_type),
             bids: bids_vec,
             asks: asks_vec,
             last_price: self.last_trade_price(),
@@ -397,6 +465,24 @@ impl Orderbook {
             }
         }
     }
+
+    /// Get all buy orders at a specific price level
+    pub fn get_bids_at_price(&self, price: Decimal) -> Vec<OrderEntry> {
+        let price_level = PriceLevel::from_decimal(price);
+        let bids = self.bids.read();
+        bids.get(&price_level)
+            .map(|q| q.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Get all sell orders at a specific price level
+    pub fn get_asks_at_price(&self, price: Decimal) -> Vec<OrderEntry> {
+        let price_level = PriceLevel::from_decimal(price);
+        let asks = self.asks.read();
+        asks.get(&price_level)
+            .map(|q| q.iter().cloned().collect())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -404,7 +490,19 @@ mod tests {
     use super::*;
     use rust_decimal_macros::dec;
 
-    fn create_test_order(id: Uuid, price: Decimal, amount: Decimal, side: Side) -> OrderEntry {
+    fn create_market_key() -> (String, Uuid, Uuid) {
+        let market_id = Uuid::new_v4();
+        let outcome_id = Uuid::new_v4();
+        let market_key = format!("{}:{}:yes", market_id, outcome_id);
+        (market_key, market_id, outcome_id)
+    }
+
+    fn create_test_order(
+        id: Uuid,
+        price: Decimal,
+        amount: Decimal,
+        side: Side,
+    ) -> OrderEntry {
         OrderEntry {
             id,
             user_address: "0x1234".to_string(),
@@ -418,12 +516,60 @@ mod tests {
     }
 
     #[test]
-    fn test_add_and_cancel_order() {
-        let book = Orderbook::new("BTCUSDT".to_string());
-        let order_id = Uuid::new_v4();
-        let order = create_test_order(order_id, dec!(100.0), dec!(1.0), Side::Buy);
+    fn test_price_validation() {
+        let (market_key, _, _) = create_market_key();
+        let book = Orderbook::new(market_key);
 
-        book.add_order(order);
+        // Valid price
+        let valid_order = create_test_order(
+            Uuid::new_v4(),
+            dec!(0.65),
+            dec!(100),
+            Side::Buy,
+        );
+        assert!(book.add_order(valid_order).is_ok());
+
+        // Invalid price (0)
+        let invalid_order = create_test_order(
+            Uuid::new_v4(),
+            dec!(0),
+            dec!(100),
+            Side::Buy,
+        );
+        assert!(book.add_order(invalid_order).is_err());
+
+        // Invalid price (1)
+        let invalid_order = create_test_order(
+            Uuid::new_v4(),
+            dec!(1),
+            dec!(100),
+            Side::Buy,
+        );
+        assert!(book.add_order(invalid_order).is_err());
+
+        // Invalid price (> 1)
+        let invalid_order = create_test_order(
+            Uuid::new_v4(),
+            dec!(1.5),
+            dec!(100),
+            Side::Buy,
+        );
+        assert!(book.add_order(invalid_order).is_err());
+    }
+
+    #[test]
+    fn test_add_and_cancel_order() {
+        let (market_key, _, _) = create_market_key();
+        let book = Orderbook::new(market_key);
+        let order_id = Uuid::new_v4();
+        let order = create_test_order(
+            order_id,
+            dec!(0.65),
+            dec!(100),
+            Side::Buy,
+        );
+
+        book.add_order(order).unwrap();
         assert_eq!(book.order_count(), 1);
         assert!(book.has_order(&order_id));
 
@@ -435,32 +581,70 @@ mod tests {
 
     #[test]
     fn test_best_bid_ask() {
-        let book = Orderbook::new("BTCUSDT".to_string());
+        let (market_key, _, _) = create_market_key();
+        let book = Orderbook::new(market_key);
 
         // Add bids
-        book.add_order(create_test_order(Uuid::new_v4(), dec!(100.0), dec!(1.0), Side::Buy));
-        book.add_order(create_test_order(Uuid::new_v4(), dec!(101.0), dec!(1.0), Side::Buy));
+        book.add_order(create_test_order(
+            Uuid::new_v4(),
+            dec!(0.60),
+            dec!(100),
+            Side::Buy,
+        ))
+        .unwrap();
+        book.add_order(create_test_order(
+            Uuid::new_v4(),
+            dec!(0.65),
+            dec!(100),
+            Side::Buy,
+        ))
+        .unwrap();
 
         // Add asks
-        book.add_order(create_test_order(Uuid::new_v4(), dec!(102.0), dec!(1.0), Side::Sell));
-        book.add_order(create_test_order(Uuid::new_v4(), dec!(103.0), dec!(1.0), Side::Sell));
+        book.add_order(create_test_order(
+            Uuid::new_v4(),
+            dec!(0.70),
+            dec!(100),
+            Side::Sell,
+        ))
+        .unwrap();
+        book.add_order(create_test_order(
+            Uuid::new_v4(),
+            dec!(0.75),
+            dec!(100),
+            Side::Sell,
+        ))
+        .unwrap();
 
-        assert_eq!(book.best_bid(), Some(dec!(101.0)));
-        assert_eq!(book.best_ask(), Some(dec!(102.0)));
-        assert_eq!(book.spread(), Some(dec!(1.0)));
+        assert_eq!(book.best_bid(), Some(dec!(0.65)));
+        assert_eq!(book.best_ask(), Some(dec!(0.70)));
+        assert_eq!(book.spread(), Some(dec!(0.05)));
     }
 
     #[test]
     fn test_match_buy_order() {
-        let book = Orderbook::new("BTCUSDT".to_string());
+        let (market_key, _, _) = create_market_key();
+        let book = Orderbook::new(market_key);
         let fee_config = FeeConfig::default();
 
         // Add sell orders (asks)
         let ask1_id = Uuid::new_v4();
-        book.add_order(create_test_order(ask1_id, dec!(100.0), dec!(1.0), Side::Sell));
+        book.add_order(create_test_order(
+            ask1_id,
+            dec!(0.60),
+            dec!(100),
+            Side::Sell,
+        ))
+        .unwrap();
 
         let ask2_id = Uuid::new_v4();
-        book.add_order(create_test_order(ask2_id, dec!(101.0), dec!(2.0), Side::Sell));
+        book.add_order(create_test_order(
+            ask2_id,
+            dec!(0.65),
+            dec!(200),
+            Side::Sell,
+        ))
+        .unwrap();
 
         // Match a buy order
         let taker_id = Uuid::new_v4();
@@ -468,41 +652,97 @@ mod tests {
             taker_id,
             "0x5678",
             Side::Buy,
-            dec!(1.5),
-            Some(dec!(101.0)),
+            dec!(150),
+            Some(dec!(0.65)),
             &fee_config,
         );
 
         assert_eq!(trades.len(), 2);
-        assert_eq!(remaining, dec!(0.0));
+        assert_eq!(remaining, dec!(0));
 
-        // First trade should be at 100.0
-        assert_eq!(trades[0].price, dec!(100.0));
-        assert_eq!(trades[0].amount, dec!(1.0));
+        // First trade should be at 0.60
+        assert_eq!(trades[0].price, dec!(0.60));
+        assert_eq!(trades[0].amount, dec!(100));
+        assert_eq!(trades[0].match_type, MatchType::Normal);
+        assert_eq!(trades[0].share_type, ShareType::Yes);
 
-        // Second trade should be at 101.0
-        assert_eq!(trades[1].price, dec!(101.0));
-        assert_eq!(trades[1].amount, dec!(0.5));
+        // Second trade should be at 0.65
+        assert_eq!(trades[1].price, dec!(0.65));
+        assert_eq!(trades[1].amount, dec!(50));
 
         // Check remaining ask
         assert!(!book.has_order(&ask1_id)); // Fully filled
-        assert!(book.has_order(&ask2_id));  // Partially filled
+        assert!(book.has_order(&ask2_id)); // Partially filled
+    }
+
+    #[test]
+    fn test_symmetric_fee_in_trades() {
+        let (market_key, _, _) = create_market_key();
+        let book = Orderbook::new(market_key);
+        let fee_config = FeeConfig::default();
+
+        // Add a sell order at 0.90
+        book.add_order(create_test_order(
+            Uuid::new_v4(),
+            dec!(0.90),
+            dec!(100),
+            Side::Sell,
+        ))
+        .unwrap();
+
+        // Match with a buy order
+        let (trades, _) = book.match_order(
+            Uuid::new_v4(),
+            "0x5678",
+            Side::Buy,
+            dec!(100),
+            Some(dec!(0.95)),
+            &fee_config,
+        );
+
+        assert_eq!(trades.len(), 1);
+
+        // Fee should be based on min(0.90, 0.10) = 0.10
+        // fee = 0.02 * 0.10 * 100 = 0.2 (for taker)
+        let expected_taker_fee = fee_config.calculate_taker_fee(dec!(0.90), dec!(100));
+        assert_eq!(trades[0].taker_fee, expected_taker_fee);
     }
 
     #[test]
     fn test_snapshot() {
-        let book = Orderbook::new("BTCUSDT".to_string());
+        let (market_key, market_id, outcome_id) = create_market_key();
+        let book = Orderbook::new(market_key.clone());
 
-        book.add_order(create_test_order(Uuid::new_v4(), dec!(100.0), dec!(1.0), Side::Buy));
-        book.add_order(create_test_order(Uuid::new_v4(), dec!(100.0), dec!(2.0), Side::Buy));
-        book.add_order(create_test_order(Uuid::new_v4(), dec!(102.0), dec!(1.5), Side::Sell));
+        book.add_order(create_test_order(
+            Uuid::new_v4(),
+            dec!(0.60),
+            dec!(100),
+            Side::Buy,
+        ))
+        .unwrap();
+        book.add_order(create_test_order(
+            Uuid::new_v4(),
+            dec!(0.60),
+            dec!(200),
+            Side::Buy,
+        ))
+        .unwrap();
+        book.add_order(create_test_order(
+            Uuid::new_v4(),
+            dec!(0.70),
+            dec!(150),
+            Side::Sell,
+        ))
+        .unwrap();
 
         let snapshot = book.snapshot(10);
 
-        assert_eq!(snapshot.symbol, "BTCUSDT");
+        // Check symbol contains market_id and outcome_id
+        assert!(snapshot.symbol.contains(&market_id.to_string()));
+        assert!(snapshot.symbol.contains(&outcome_id.to_string()));
         assert_eq!(snapshot.bids.len(), 1);
         assert_eq!(snapshot.asks.len(), 1);
-        assert_eq!(snapshot.bids[0][1], "3.0"); // Total bid at 100.0 (1.0 + 2.0)
-        assert_eq!(snapshot.asks[0][1], "1.5");
+        assert_eq!(snapshot.bids[0][1], "300"); // Total bid at 0.60 (100 + 200)
+        assert_eq!(snapshot.asks[0][1], "150");
     }
 }

@@ -53,7 +53,8 @@ impl HistoryManager {
 
     /// Store a trade record
     pub fn store_trade(&self, trade: TradeRecord) {
-        let symbol = trade.symbol.clone();
+        // Construct symbol/market_key from components
+        let symbol = format!("{}:{}:{}", trade.market_id, trade.outcome_id, trade.share_type);
 
         let mut entry = self.trade_history
             .entry(symbol.clone())
@@ -275,9 +276,25 @@ mod tests {
     use super::*;
 
     fn create_test_trade(trade_id: &str, symbol: &str, price: &str) -> TradeRecord {
+        // Parse market_key format if possible, otherwise use defaults
+        let (market_id, outcome_id, share_type) = if symbol.contains(':') {
+            let parts: Vec<&str> = symbol.split(':').collect();
+            if parts.len() == 3 {
+                (parts[0].to_string(), parts[1].to_string(), parts[2].to_string())
+            } else {
+                (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string(), "yes".to_string())
+            }
+        } else {
+            // Legacy symbol format - create dummy UUIDs
+            (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string(), "yes".to_string())
+        };
+
         TradeRecord {
             trade_id: trade_id.to_string(),
-            symbol: symbol.to_string(),
+            market_id,
+            outcome_id,
+            share_type,
+            match_type: "normal".to_string(),
             side: "buy".to_string(),
             price: price.to_string(),
             amount: "1.0".to_string(),
@@ -315,15 +332,22 @@ mod tests {
     fn test_store_and_get_trades() {
         let manager = HistoryManager::new();
 
-        manager.store_trade(create_test_trade("t1", "BTCUSDT", "100.0"));
-        manager.store_trade(create_test_trade("t2", "BTCUSDT", "101.0"));
-        manager.store_trade(create_test_trade("t3", "ETHUSDT", "3000.0"));
+        // Create consistent market keys for trades
+        let market1_id = uuid::Uuid::new_v4();
+        let market2_id = uuid::Uuid::new_v4();
+        let outcome_id = uuid::Uuid::new_v4();
+        let market1_key = format!("{}:{}:yes", market1_id, outcome_id);
+        let market2_key = format!("{}:{}:yes", market2_id, outcome_id);
 
-        let btc_trades = manager.get_trades("BTCUSDT", &TradeHistoryQuery::default());
-        assert_eq!(btc_trades.total_count, 2);
+        manager.store_trade(create_test_trade("t1", &market1_key, "0.55"));
+        manager.store_trade(create_test_trade("t2", &market1_key, "0.56"));
+        manager.store_trade(create_test_trade("t3", &market2_key, "0.65"));
 
-        let eth_trades = manager.get_trades("ETHUSDT", &TradeHistoryQuery::default());
-        assert_eq!(eth_trades.total_count, 1);
+        let market1_trades = manager.get_trades(&market1_key, &TradeHistoryQuery::default());
+        assert_eq!(market1_trades.total_count, 2);
+
+        let market2_trades = manager.get_trades(&market2_key, &TradeHistoryQuery::default());
+        assert_eq!(market2_trades.total_count, 1);
 
         assert_eq!(manager.total_trade_count(), 3);
     }
@@ -332,11 +356,16 @@ mod tests {
     fn test_trade_limit() {
         let manager = HistoryManager::with_limits(2, 100);
 
-        manager.store_trade(create_test_trade("t1", "BTCUSDT", "100.0"));
-        manager.store_trade(create_test_trade("t2", "BTCUSDT", "101.0"));
-        manager.store_trade(create_test_trade("t3", "BTCUSDT", "102.0"));
+        // Create consistent market key
+        let market_id = uuid::Uuid::new_v4();
+        let outcome_id = uuid::Uuid::new_v4();
+        let market_key = format!("{}:{}:yes", market_id, outcome_id);
 
-        let trades = manager.get_trades("BTCUSDT", &TradeHistoryQuery::default());
+        manager.store_trade(create_test_trade("t1", &market_key, "0.55"));
+        manager.store_trade(create_test_trade("t2", &market_key, "0.56"));
+        manager.store_trade(create_test_trade("t3", &market_key, "0.57"));
+
+        let trades = manager.get_trades(&market_key, &TradeHistoryQuery::default());
         assert_eq!(trades.total_count, 2);
 
         // Most recent should be first

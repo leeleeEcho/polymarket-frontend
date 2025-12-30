@@ -20,21 +20,23 @@ pub struct CreateUser {
     pub address: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct UserProfile {
     pub address: String,
-    pub referral_code: Option<String>,
-    pub referrer_address: Option<String>,
+    pub username: Option<String>,
+    pub avatar_url: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl From<User> for UserProfile {
     fn from(user: User) -> Self {
         Self {
             address: user.address,
-            referral_code: user.referral_code,
-            referrer_address: user.referrer_address,
+            username: None,
+            avatar_url: None,
             created_at: user.created_at,
+            updated_at: user.updated_at,
         }
     }
 }

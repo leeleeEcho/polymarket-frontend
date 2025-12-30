@@ -14,7 +14,6 @@ use uuid::Uuid;
 use crate::auth::eip712::{verify_ws_auth_signature, WebSocketAuthMessage};
 use crate::auth::jwt::validate_token;
 use crate::services::matching::OrderbookUpdate;
-use crate::services::kline::KlinePeriod;
 use crate::AppState;
 
 /// Normalize symbol format to backend format (BTCUSDT)
@@ -215,17 +214,6 @@ pub struct KlineData {
     pub is_final: bool,
 }
 
-/// Format funding rate as percentage string with sign
-fn format_funding_rate(rate: Decimal) -> String {
-    let pct = rate * Decimal::from(100);
-    if pct >= Decimal::ZERO {
-        format!("+{}%", pct.round_dp(4))
-    } else {
-        format!("{}%", pct.round_dp(4))
-    }
-}
-
-
 /// Validate timestamp (within 5 minutes)
 fn validate_timestamp(timestamp: u64) -> bool {
     let now = std::time::SystemTime::now()
@@ -249,9 +237,6 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // Subscribe to orderbook updates from matching engine
     let mut orderbook_receiver = state.matching_engine.subscribe_orderbook();
     tracing::info!("📡 WebSocket subscribed to orderbook events from matching engine");
-
-    // Subscribe to K-line updates
-    let mut kline_receiver = state.kline_service.subscribe();
 
     // Subscribe to order updates for real-time push
     let mut order_update_receiver = state.order_update_sender.subscribe();
@@ -377,39 +362,6 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // Handle K-line updates
-            kline = kline_receiver.recv() => {
-                match kline {
-                    Ok(kline_update) => {
-                        // Check if client is subscribed to this kline channel
-                        let channel = format!("kline:{}:{}", kline_update.symbol, kline_update.period);
-                        if subscriptions.contains(&channel) {
-                            let msg = ServerMessage::Kline {
-                                channel: channel.clone(),
-                                data: KlineData {
-                                    time: kline_update.candle.time,
-                                    open: kline_update.candle.open.to_string(),
-                                    high: kline_update.candle.high.to_string(),
-                                    low: kline_update.candle.low.to_string(),
-                                    close: kline_update.candle.close.to_string(),
-                                    volume: kline_update.candle.volume.to_string(),
-                                    quote_volume: kline_update.candle.quote_volume.map(|v| v.to_string()),
-                                    trade_count: kline_update.candle.trade_count,
-                                    is_final: kline_update.is_final,
-                                },
-                            };
-                            let _ = sender.send(Message::Text(serde_json::to_string(&msg).unwrap())).await;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("Kline receiver lagged by {} messages", n);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        // Continue without kline updates
-                    }
-                }
-            }
-
             // Handle order updates (real-time push when orders are created/updated)
             order_update = order_update_receiver.recv() => {
                 match order_update {
@@ -440,86 +392,10 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // Ticker updates
+            // Ticker updates - simplified for prediction markets
             _ = ticker_interval.tick() => {
-                for channel in &subscriptions {
-                    if channel.starts_with("ticker:") {
-                        let raw_symbol = channel.strip_prefix("ticker:").unwrap_or("");
-                        let symbol = normalize_symbol(raw_symbol);
-                        
-                        tracing::trace!("Ticker update check for {} (from channel: {})", symbol, channel);
-                        
-                        if let Some(price_data) = state.price_feed_service.get_price_data(&symbol).await {
-                            tracing::trace!("Sending ticker data for {}: price={}", symbol, price_data.last_price);
-                            // Get funding rate info for open interest and rates
-                            let funding_info = state.funding_rate_service.get_funding_rate(&symbol).await;
-
-                            // Get open interest values
-                            let (oi_long, oi_short) = if let Some(ref info) = funding_info {
-                                (info.long_open_interest, info.short_open_interest)
-                            } else {
-                                (Decimal::ZERO, Decimal::ZERO)
-                            };
-
-                            // Calculate OI percentages
-                            let total_oi = oi_long + oi_short;
-                            let (oi_long_pct, oi_short_pct) = if total_oi > Decimal::ZERO {
-                                let long_pct = (oi_long / total_oi * Decimal::from(100)).round_dp(0);
-                                let short_pct = (oi_short / total_oi * Decimal::from(100)).round_dp(0);
-                                (long_pct, short_pct)
-                            } else {
-                                (Decimal::from(50), Decimal::from(50))
-                            };
-
-                            // Get funding rate per hour
-                            let funding_rate_1h = if let Some(ref info) = funding_info {
-                                info.funding_rate_per_hour
-                            } else {
-                                Decimal::ZERO
-                            };
-
-                            // Funding: Long pays when rate is positive, Short pays when rate is negative
-                            let funding_long = -funding_rate_1h;  // Long pays positive rate
-                            let funding_short = funding_rate_1h;   // Short receives positive rate
-
-                            // Calculate available liquidity from orderbook
-                            let (liq_long, liq_short) = if let Some(orderbook_cache) = state.cache.orderbook_opt() {
-                                let ob = orderbook_cache.get_orderbook(&symbol, Some(50)).await;
-                                let ask_liquidity: Decimal = ob.asks.iter()
-                                    .map(|level| level.price * level.amount)
-                                    .sum();
-                                let bid_liquidity: Decimal = ob.bids.iter()
-                                    .map(|level| level.price * level.amount)
-                                    .sum();
-                                (ask_liquidity, bid_liquidity)  // Long buys from asks, Short buys from bids
-                            } else {
-                                (Decimal::ZERO, Decimal::ZERO)
-                            };
-
-                            let msg = ServerMessage::Ticker {
-                                symbol: symbol.to_string(),
-                                last_price: price_data.last_price.to_string(),
-                                mark_price: price_data.mark_price.to_string(),
-                                index_price: price_data.index_price.to_string(),
-                                price_change_24h: price_data.price_change_24h.to_string(),
-                                price_change_percent_24h: price_data.price_change_percent_24h.to_string(),
-                                high_24h: price_data.high_24h.to_string(),
-                                low_24h: price_data.low_24h.to_string(),
-                                volume_24h: price_data.volume_24h.to_string(),
-                                volume_24h_usd: price_data.volume_ccy_24h.to_string(),
-                                open_interest_long: oi_long.to_string(),
-                                open_interest_short: oi_short.to_string(),
-                                open_interest_long_percent: oi_long_pct.to_string(),
-                                open_interest_short_percent: oi_short_pct.to_string(),
-                                available_liquidity_long: liq_long.to_string(),
-                                available_liquidity_short: liq_short.to_string(),
-                                funding_rate_long_1h: format_funding_rate(funding_long),
-                                funding_rate_short_1h: format_funding_rate(funding_short),
-                            };
-                            let _ = sender.send(Message::Text(serde_json::to_string(&msg).unwrap())).await;
-                        }
-                    }
-                }
+                // TODO: Implement prediction market ticker updates if needed
+                // For now, ticker updates are not supported in the prediction market version
             }
 
             // Orderbook updates from Redis cache
@@ -840,76 +716,9 @@ async fn handle_client_message(
                 });
                 let _ = sender.send(Message::Text(serde_json::to_string(&msg).unwrap())).await;
             } else if channel.starts_with("ticker:") {
-                let raw_symbol = channel.strip_prefix("ticker:").unwrap_or("");
-                let symbol = normalize_symbol(raw_symbol);
-                if let Some(price_data) = state.price_feed_service.get_price_data(&symbol).await {
-                    // Get funding rate info for open interest and rates
-                    let funding_info = state.funding_rate_service.get_funding_rate(&symbol).await;
-
-                    // Get open interest values
-                    let (oi_long, oi_short) = if let Some(ref info) = funding_info {
-                        (info.long_open_interest, info.short_open_interest)
-                    } else {
-                        (Decimal::ZERO, Decimal::ZERO)
-                    };
-
-                    // Calculate OI percentages
-                    let total_oi = oi_long + oi_short;
-                    let (oi_long_pct, oi_short_pct) = if total_oi > Decimal::ZERO {
-                        let long_pct = (oi_long / total_oi * Decimal::from(100)).round_dp(0);
-                        let short_pct = (oi_short / total_oi * Decimal::from(100)).round_dp(0);
-                        (long_pct, short_pct)
-                    } else {
-                        (Decimal::from(50), Decimal::from(50))
-                    };
-
-                    // Get funding rate per hour
-                    let funding_rate_1h = if let Some(ref info) = funding_info {
-                        info.funding_rate_per_hour
-                    } else {
-                        Decimal::ZERO
-                    };
-
-                    // Funding: Long pays when rate is positive, Short pays when rate is negative
-                    let funding_long = -funding_rate_1h;
-                    let funding_short = funding_rate_1h;
-
-                    // Calculate available liquidity from orderbook
-                    let (liq_long, liq_short) = if let Some(orderbook_cache) = state.cache.orderbook_opt() {
-                        let ob = orderbook_cache.get_orderbook(&symbol, Some(50)).await;
-                        let ask_liquidity: Decimal = ob.asks.iter()
-                            .map(|level| level.price * level.amount)
-                            .sum();
-                        let bid_liquidity: Decimal = ob.bids.iter()
-                            .map(|level| level.price * level.amount)
-                            .sum();
-                        (ask_liquidity, bid_liquidity)
-                    } else {
-                        (Decimal::ZERO, Decimal::ZERO)
-                    };
-
-                    let msg = ServerMessage::Ticker {
-                        symbol: symbol.to_string(),
-                        last_price: price_data.last_price.to_string(),
-                        mark_price: price_data.mark_price.to_string(),
-                        index_price: price_data.index_price.to_string(),
-                        price_change_24h: price_data.price_change_24h.to_string(),
-                        price_change_percent_24h: price_data.price_change_percent_24h.to_string(),
-                        high_24h: price_data.high_24h.to_string(),
-                        low_24h: price_data.low_24h.to_string(),
-                        volume_24h: price_data.volume_24h.to_string(),
-                        volume_24h_usd: price_data.volume_ccy_24h.to_string(),
-                        open_interest_long: oi_long.to_string(),
-                        open_interest_short: oi_short.to_string(),
-                        open_interest_long_percent: oi_long_pct.to_string(),
-                        open_interest_short_percent: oi_short_pct.to_string(),
-                        available_liquidity_long: liq_long.to_string(),
-                        available_liquidity_short: liq_short.to_string(),
-                        funding_rate_long_1h: format_funding_rate(funding_long),
-                        funding_rate_short_1h: format_funding_rate(funding_short),
-                    };
-                    let _ = sender.send(Message::Text(serde_json::to_string(&msg).unwrap())).await;
-                }
+                // TODO: Implement prediction market ticker subscription
+                // For now, just acknowledge the subscription without sending data
+                tracing::debug!("Ticker subscription for prediction markets not yet implemented");
             } else if channel == "positions" && *authenticated && user_address.is_some() {
                 let address = user_address.as_ref().unwrap().to_lowercase();
                 if let Ok(positions) = fetch_user_positions(state, &address).await {
@@ -931,37 +740,8 @@ async fn handle_client_message(
                         let _ = sender.send(Message::Text(serde_json::to_string(&order).unwrap())).await;
                     }
                 }
-            } else if channel.starts_with("kline:") {
-                // Parse kline channel: kline:{symbol}:{period}
-                let parts: Vec<&str> = channel.strip_prefix("kline:").unwrap_or("").split(':').collect();
-                if parts.len() == 2 {
-                    let raw_symbol = parts[0];
-                    let symbol = normalize_symbol(raw_symbol);
-                    let period_str = parts[1];
-                    if let Some(period) = KlinePeriod::from_str(period_str) {
-                        // Send initial snapshot (latest candle)
-                        let candles = state.kline_service.get_candles(&symbol, period, 1, None, None).await;
-                        if let Some(latest_candle) = candles.into_iter().last() {
-                            let snapshot_data = KlineData {
-                                time: latest_candle.time,
-                                open: latest_candle.open.to_string(),
-                                high: latest_candle.high.to_string(),
-                                low: latest_candle.low.to_string(),
-                                close: latest_candle.close.to_string(),
-                                volume: latest_candle.volume.to_string(),
-                                quote_volume: latest_candle.quote_volume.map(|v| v.to_string()),
-                                trade_count: latest_candle.trade_count,
-                                is_final: true, // Historical candles are final
-                            };
-                            let msg = ServerMessage::KlineSnapshot {
-                                channel: channel.clone(),
-                                data: snapshot_data,
-                            };
-                            let _ = sender.send(Message::Text(serde_json::to_string(&msg).unwrap())).await;
-                        }
-                    }
-                }
             }
+            // TODO: Add kline support for prediction markets if needed
         }
 
         ClientMessage::Unsubscribe { channel } => {
@@ -981,57 +761,38 @@ async fn handle_client_message(
 }
 
 /// Fetch user positions from database
+/// Note: In prediction markets, "positions" are actually share holdings
 async fn fetch_user_positions(state: &Arc<AppState>, address: &str) -> Result<Vec<ServerMessage>, sqlx::Error> {
-    let rows: Vec<(String, String, String, Decimal, Decimal, Decimal, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    // For prediction markets, we don't have traditional positions with leverage
+    // Instead we have share holdings. For now, return empty until we implement share holdings
+    let rows: Vec<(String, String, String, Decimal, Decimal, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         r#"
-        SELECT id::text, symbol, side, size, entry_price, collateral, leverage, updated_at
-        FROM positions
-        WHERE user_address = $1 AND status = 'open'
+        SELECT id::text, market_id::text, share_type, shares, avg_price, updated_at
+        FROM share_holdings
+        WHERE user_address = $1 AND shares > 0
         "#
     )
     .bind(address)
     .fetch_all(&state.db.pool)
-    .await?;
+    .await
+    .unwrap_or_default(); // Return empty if table doesn't exist yet
 
     let mut messages = Vec::new();
-    for (id, symbol, side, size, entry_price, collateral, leverage, updated_at) in rows {
-        // Get mark price
-        let mark_price = state.price_feed_service
-            .get_mark_price(&symbol)
-            .await
-            .unwrap_or(entry_price);
-
-        // Calculate unrealized PnL
-        let is_long = side.to_lowercase() == "long";
-        let unrealized_pnl = if is_long {
-            (mark_price - entry_price) * size
-        } else {
-            (entry_price - mark_price) * size
-        };
-
-        // Calculate liquidation price
-        let position_value = size * entry_price;
-        let maintenance_margin = position_value * Decimal::new(5, 3);
-        let liq_distance = (collateral - maintenance_margin) / size;
-        let liquidation_price = if is_long {
-            entry_price - liq_distance
-        } else {
-            entry_price + liq_distance
-        };
-
+    for (id, market_id, share_type, shares, avg_price, updated_at) in rows {
+        // For prediction markets, we report holdings as "positions"
         messages.push(ServerMessage::Position {
             id,
-            symbol,
-            side,
-            size: size.to_string(),
-            entry_price: entry_price.to_string(),
-            mark_price: mark_price.to_string(),
-            liquidation_price: liquidation_price.max(Decimal::ZERO).to_string(),
-            unrealized_pnl: unrealized_pnl.to_string(),
-            leverage,
-            margin: collateral.to_string(),
+            symbol: format!("{}:{}", market_id, share_type),
+            side: share_type, // Yes or No
+            size: shares.to_string(),
+            entry_price: avg_price.to_string(),
+            mark_price: avg_price.to_string(), // TODO: Get current probability from orderbook
+            liquidation_price: "0".to_string(), // No liquidation in prediction markets
+            unrealized_pnl: "0".to_string(), // TODO: Calculate based on current probability
+            leverage: 1, // No leverage in prediction markets
+            margin: (shares * avg_price).to_string(),
             updated_at: updated_at.timestamp_millis(),
-            event: None, // Event is set when position state changes
+            event: None,
         });
     }
 

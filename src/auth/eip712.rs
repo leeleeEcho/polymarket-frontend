@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 /// EIP-712 Type Hashes
 pub const LOGIN_TYPEHASH: &str = "Login(address wallet,uint256 nonce,uint256 timestamp)";
-pub const CREATE_ORDER_TYPEHASH: &str = "CreateOrder(address wallet,string symbol,string side,string orderType,string price,string amount,uint32 leverage,uint256 timestamp)";
+pub const CREATE_ORDER_TYPEHASH: &str = "CreateOrder(address wallet,string marketId,string outcomeId,string shareType,string side,string orderType,string price,string amount,uint256 timestamp)";
 pub const CANCEL_ORDER_TYPEHASH: &str = "CancelOrder(address wallet,string orderId,uint256 timestamp)";
 pub const BATCH_CANCEL_TYPEHASH: &str = "BatchCancelOrders(address wallet,string orderIds,uint256 timestamp)";
 pub const CREATE_REFERRAL_TYPEHASH: &str = "CreateReferralCode(address wallet,uint256 timestamp)";
@@ -85,16 +85,17 @@ impl LoginMessage {
     }
 }
 
-/// Create Order message for EIP-712 signature verification
+/// Create Order message for EIP-712 signature verification (Prediction Markets)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateOrderMessage {
     pub wallet: String,
-    pub symbol: String,
+    pub market_id: String,
+    pub outcome_id: String,
+    pub share_type: String,
     pub side: String,
     pub order_type: String,
     pub price: String,
     pub amount: String,
-    pub leverage: u32,
     pub timestamp: u64,
 }
 
@@ -106,12 +107,13 @@ impl CreateOrderMessage {
         let encoded = ethers::abi::encode(&[
             Token::FixedBytes(type_hash.to_vec()),
             Token::Address(wallet_address),
-            Token::FixedBytes(keccak256(self.symbol.as_bytes()).to_vec()),
+            Token::FixedBytes(keccak256(self.market_id.as_bytes()).to_vec()),
+            Token::FixedBytes(keccak256(self.outcome_id.as_bytes()).to_vec()),
+            Token::FixedBytes(keccak256(self.share_type.as_bytes()).to_vec()),
             Token::FixedBytes(keccak256(self.side.as_bytes()).to_vec()),
             Token::FixedBytes(keccak256(self.order_type.as_bytes()).to_vec()),
             Token::FixedBytes(keccak256(self.price.as_bytes()).to_vec()),
             Token::FixedBytes(keccak256(self.amount.as_bytes()).to_vec()),
-            Token::Uint(U256::from(self.leverage)),
             Token::Uint(U256::from(self.timestamp)),
         ]);
 
@@ -438,7 +440,7 @@ pub fn get_login_typed_data(wallet: &str, nonce: u64, timestamp: u64) -> serde_j
     })
 }
 
-/// Get the EIP-712 typed data structure for create order signing
+/// Get the EIP-712 typed data structure for create order signing (Prediction Markets)
 /// Returns the complete typed data object that can be used with eth_signTypedData_v4
 pub fn get_create_order_typed_data(msg: &CreateOrderMessage) -> serde_json::Value {
     let domain = get_domain();
@@ -453,12 +455,13 @@ pub fn get_create_order_typed_data(msg: &CreateOrderMessage) -> serde_json::Valu
             ],
             "CreateOrder": [
                 { "name": "wallet", "type": "address" },
-                { "name": "symbol", "type": "string" },
+                { "name": "marketId", "type": "string" },
+                { "name": "outcomeId", "type": "string" },
+                { "name": "shareType", "type": "string" },
                 { "name": "side", "type": "string" },
                 { "name": "orderType", "type": "string" },
                 { "name": "price", "type": "string" },
                 { "name": "amount", "type": "string" },
-                { "name": "leverage", "type": "uint32" },
                 { "name": "timestamp", "type": "uint256" }
             ]
         },
@@ -471,12 +474,13 @@ pub fn get_create_order_typed_data(msg: &CreateOrderMessage) -> serde_json::Valu
         },
         "message": {
             "wallet": msg.wallet,
-            "symbol": msg.symbol,
+            "marketId": msg.market_id,
+            "outcomeId": msg.outcome_id,
+            "shareType": msg.share_type,
             "side": msg.side,
             "orderType": msg.order_type,
             "price": msg.price,
             "amount": msg.amount,
-            "leverage": msg.leverage,
             "timestamp": msg.timestamp.to_string()
         }
     })

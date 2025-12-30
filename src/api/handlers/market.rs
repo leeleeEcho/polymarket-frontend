@@ -1,53 +1,24 @@
+//! Market API Handlers for Prediction Markets
+//!
+//! Provides endpoints for listing markets, getting orderbooks, trades, and prices.
+
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use uuid::Uuid;
 
+use crate::models::market::ShareType;
 use crate::AppState;
-// use crate::services::price_feed::MarketInfo;
 
-/// Normalize symbol format to backend format (BTCUSDT)
-/// Supports multiple input formats:
-/// - "BTCUSDT" -> "BTCUSDT" (already correct)
-/// - "BTC-USD" -> "BTCUSDT" (frontend TradingView format)
-/// - "BTC-USDT" -> "BTCUSDT"
-/// - "btcusdt" -> "BTCUSDT" (lowercase)
-fn normalize_symbol(symbol: &str) -> String {
-    let upper = symbol.to_uppercase();
-    
-    // If already in BTCUSDT format (no separators), return as is
-    if !upper.contains('-') && !upper.contains('/') && !upper.contains('_') {
-        return upper;
-    }
-    
-    // Handle BTC-USD format (convert to BTCUSDT)
-    if upper.ends_with("-USD") {
-        let base = upper.strip_suffix("-USD").unwrap_or(&upper);
-        return format!("{}USDT", base);
-    }
-    
-    // Handle BTC-USDT format (convert to BTCUSDT)
-    if upper.contains("-USDT") {
-        return upper.replace("-", "");
-    }
-    
-    // Handle BTC/USD or BTC_USD formats
-    if upper.contains("/") || upper.contains("_") {
-        let cleaned = upper.replace("/", "").replace("_", "");
-        if !cleaned.ends_with("USDT") && cleaned.ends_with("USD") {
-            let base = cleaned.strip_suffix("USD").unwrap_or(&cleaned);
-            return format!("{}USDT", base);
-        }
-        return cleaned;
-    }
-    
-    // Default: return uppercase version
-    upper
-}
+// ============================================================================
+// Response Types
+// ============================================================================
 
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
@@ -55,347 +26,450 @@ pub struct ErrorResponse {
     pub code: String,
 }
 
+/// Outcome information for a prediction market
 #[derive(Debug, Serialize)]
-pub struct Market {
-    pub symbol: String,
-    pub base_asset: String,
-    pub quote_asset: String,
-    pub last_price: Decimal,
-    pub price_change_24h: Decimal,
-    pub price_change_percent_24h: Decimal,
-    pub high_24h: Decimal,
-    pub low_24h: Decimal,
+pub struct OutcomeInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub probability: Decimal,
+}
+
+/// Prediction market information
+#[derive(Debug, Serialize)]
+pub struct MarketInfo {
+    pub id: Uuid,
+    pub question: String,
+    pub description: Option<String>,
+    pub category: String,
+    pub outcomes: Vec<OutcomeInfo>,
+    pub status: String,
+    pub resolution_source: Option<String>,
+    pub end_time: Option<i64>,
     pub volume_24h: Decimal,
-    pub volume_24h_usd: Decimal,
-    pub rank: usize,
+    pub total_volume: Decimal,
+    pub liquidity: Decimal,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct MarketsResponse {
-    pub markets: Vec<Market>,
-    pub total: usize,
+    pub markets: Vec<MarketInfo>,
+    pub total: i64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct MarketsQuery {
-    pub limit: Option<usize>,
+    pub category: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
+/// Orderbook level
+#[derive(Debug, Serialize)]
+pub struct OrderbookLevel {
+    pub price: String,
+    pub amount: String,
+}
+
+/// Orderbook response for a market outcome
 #[derive(Debug, Serialize)]
 pub struct OrderbookResponse {
-    pub symbol: String,
-    pub bids: Vec<[String; 2]>, // [price, amount]
-    pub asks: Vec<[String; 2]>,
+    pub market_id: Uuid,
+    pub outcome_id: Uuid,
+    pub share_type: ShareType,
+    pub bids: Vec<OrderbookLevel>,
+    pub asks: Vec<OrderbookLevel>,
     pub timestamp: i64,
 }
 
+/// Trade record
 #[derive(Debug, Serialize)]
-pub struct Trade {
-    pub id: String,
-    pub price: String,
-    pub amount: String,
+pub struct TradeInfo {
+    pub id: Uuid,
+    pub price: Decimal,
+    pub amount: Decimal,
     pub side: String,
+    pub share_type: ShareType,
     pub timestamp: i64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct TradesResponse {
-    pub symbol: String,
-    pub trades: Vec<Trade>,
+    pub market_id: Uuid,
+    pub outcome_id: Uuid,
+    pub trades: Vec<TradeInfo>,
 }
 
+/// Price/ticker information for a market
 #[derive(Debug, Serialize)]
 pub struct TickerResponse {
-    pub symbol: String,
-    pub last_price: Decimal,
-    pub price_change_24h: Decimal,
-    pub price_change_percent_24h: Decimal,
-    pub high_24h: Decimal,
-    pub low_24h: Decimal,
+    pub market_id: Uuid,
+    pub outcomes: Vec<OutcomeTicker>,
     pub volume_24h: Decimal,
-    pub open_interest: Decimal,
-    pub funding_rate: Decimal,
-    pub next_funding_time: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PriceResponse {
-    pub symbol: String,
-    pub mark_price: Decimal,
-    pub index_price: Decimal,
-    pub last_price: Decimal,
-    pub bid_price: Decimal,
-    pub ask_price: Decimal,
-    pub funding_rate: Decimal,
-    pub next_funding_rate: Decimal,
-    pub next_funding_time: i64,
     pub updated_at: i64,
 }
 
-/// List all available markets (top 50 by volume from OKX)
+#[derive(Debug, Serialize)]
+pub struct OutcomeTicker {
+    pub outcome_id: Uuid,
+    pub name: String,
+    pub yes_price: Decimal,
+    pub no_price: Decimal,
+    pub probability: Decimal,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OrderbookQuery {
+    pub outcome_id: Uuid,
+    pub share_type: Option<String>,
+    pub depth: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TradesQuery {
+    pub outcome_id: Uuid,
+    pub limit: Option<i64>,
+}
+
+// ============================================================================
+// Handlers
+// ============================================================================
+
+/// List all available prediction markets
+/// GET /markets
 pub async fn list_markets(
     State(state): State<Arc<AppState>>,
     Query(query): Query<MarketsQuery>,
-) -> Result<Json<MarketsResponse>, StatusCode> {
-    let limit = query.limit.unwrap_or(50).min(50);
+) -> Result<Json<MarketsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(50).min(100);
+    let offset = query.offset.unwrap_or(0);
 
-    // Get markets from price feed service
-    let market_infos = state.price_feed_service.get_markets().await;
-    let prices = state.price_feed_service.get_all_prices().await;
+    // Query markets from database
+    let markets_data: Vec<(
+        Uuid,
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        Option<DateTime<Utc>>,
+        Decimal,
+        Decimal,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        r#"
+        SELECT m.id, m.question, m.description, m.category, m.status::text,
+               m.resolution_source, m.end_time, m.volume_24h, m.total_volume, m.created_at
+        FROM markets m
+        WHERE ($1::text IS NULL OR m.category = $1)
+        AND ($2::text IS NULL OR m.status::text = $2)
+        ORDER BY m.volume_24h DESC
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(query.category.as_ref())
+    .bind(query.status.as_ref())
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch markets: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to fetch markets".to_string(),
+                code: "MARKET_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
 
-    let markets: Vec<Market> = market_infos
+    // Get total count
+    let total: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM markets
+        WHERE ($1::text IS NULL OR category = $1)
+        AND ($2::text IS NULL OR status::text = $2)
+        "#,
+    )
+    .bind(query.category.as_ref())
+    .bind(query.status.as_ref())
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to count markets: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to count markets".to_string(),
+                code: "MARKET_COUNT_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let mut markets = Vec::new();
+
+    for (id, question, description, category, status, resolution_source, end_time, volume_24h, total_volume, created_at) in markets_data {
+        // Get outcomes for each market
+        let outcomes_data: Vec<(Uuid, String, Decimal)> = sqlx::query_as(
+            r#"
+            SELECT id, name, probability
+            FROM outcomes
+            WHERE market_id = $1
+            ORDER BY name
+            "#,
+        )
+        .bind(id)
+        .fetch_all(&state.db.pool)
+        .await
+        .unwrap_or_default();
+
+        let outcomes: Vec<OutcomeInfo> = outcomes_data
+            .into_iter()
+            .map(|(oid, name, probability)| OutcomeInfo {
+                id: oid,
+                name,
+                probability,
+            })
+            .collect();
+
+        // Calculate liquidity (sum of orderbook depth)
+        let liquidity = Decimal::ZERO; // TODO: Calculate from orderbook
+
+        markets.push(MarketInfo {
+            id,
+            question,
+            description,
+            category,
+            outcomes,
+            status,
+            resolution_source,
+            end_time: end_time.map(|t| t.timestamp_millis()),
+            volume_24h,
+            total_volume,
+            liquidity,
+            created_at: created_at.timestamp_millis(),
+        });
+    }
+
+    Ok(Json(MarketsResponse {
+        markets,
+        total: total.0,
+    }))
+}
+
+/// Get orderbook for a market outcome
+/// GET /markets/:market_id/orderbook
+pub async fn get_orderbook(
+    State(state): State<Arc<AppState>>,
+    Path(market_id): Path<Uuid>,
+    Query(query): Query<OrderbookQuery>,
+) -> Result<Json<OrderbookResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let depth = query.depth.unwrap_or(20).min(100);
+    let share_type: ShareType = query
+        .share_type
+        .as_ref()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(ShareType::Yes);
+
+    // Validate market exists
+    let market_exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM markets WHERE id = $1")
+        .bind(market_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to check market: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to check market".to_string(),
+                    code: "MARKET_CHECK_FAILED".to_string(),
+                }),
+            )
+        })?;
+
+    if market_exists.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Market not found".to_string(),
+                code: "MARKET_NOT_FOUND".to_string(),
+            }),
+        ));
+    }
+
+    // Build orderbook key for matching engine
+    let orderbook_key = format!("{}:{}:{}", market_id, query.outcome_id, share_type);
+
+    // Try to get orderbook from matching engine
+    match state.matching_engine.get_orderbook(&orderbook_key, depth) {
+        Ok(snapshot) => {
+            let bids: Vec<OrderbookLevel> = snapshot
+                .bids
+                .into_iter()
+                .map(|[price, amount]| OrderbookLevel { price, amount })
+                .collect();
+            let asks: Vec<OrderbookLevel> = snapshot
+                .asks
+                .into_iter()
+                .map(|[price, amount]| OrderbookLevel { price, amount })
+                .collect();
+
+            Ok(Json(OrderbookResponse {
+                market_id,
+                outcome_id: query.outcome_id,
+                share_type,
+                bids,
+                asks,
+                timestamp: snapshot.timestamp,
+            }))
+        }
+        Err(_) => {
+            // Return empty orderbook
+            Ok(Json(OrderbookResponse {
+                market_id,
+                outcome_id: query.outcome_id,
+                share_type,
+                bids: vec![],
+                asks: vec![],
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            }))
+        }
+    }
+}
+
+/// Get recent trades for a market outcome
+/// GET /markets/:market_id/trades
+pub async fn get_trades(
+    State(state): State<Arc<AppState>>,
+    Path(market_id): Path<Uuid>,
+    Query(query): Query<TradesQuery>,
+) -> Result<Json<TradesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(50).min(100);
+
+    let rows: Vec<(Uuid, Decimal, Decimal, String, String, DateTime<Utc>)> = sqlx::query_as(
+        r#"
+        SELECT id, price, amount, side::text, share_type::text, created_at
+        FROM trades
+        WHERE market_id = $1 AND outcome_id = $2
+        ORDER BY created_at DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(market_id)
+    .bind(query.outcome_id)
+    .bind(limit)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch trades: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to fetch trades".to_string(),
+                code: "TRADES_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let trades: Vec<TradeInfo> = rows
         .into_iter()
-        .take(limit)
-        .map(|info| {
-            let price_data = prices.get(&info.symbol);
-
-            Market {
-                symbol: info.symbol.clone(),
-                base_asset: info.base_asset,
-                quote_asset: info.quote_asset,
-                last_price: price_data.map(|p| p.last_price).unwrap_or(Decimal::ZERO),
-                price_change_24h: price_data.map(|p| p.price_change_24h).unwrap_or(Decimal::ZERO),
-                price_change_percent_24h: price_data.map(|p| p.price_change_percent_24h).unwrap_or(Decimal::ZERO),
-                high_24h: price_data.map(|p| p.high_24h).unwrap_or(Decimal::ZERO),
-                low_24h: price_data.map(|p| p.low_24h).unwrap_or(Decimal::ZERO),
-                volume_24h: price_data.map(|p| p.volume_24h).unwrap_or(Decimal::ZERO),
-                volume_24h_usd: info.volume_24h_usd,
-                rank: info.rank,
-            }
+        .map(|(id, price, amount, side, share_type, created_at)| TradeInfo {
+            id,
+            price,
+            amount,
+            side,
+            share_type: share_type.parse().unwrap_or(ShareType::Yes),
+            timestamp: created_at.timestamp_millis(),
         })
         .collect();
 
-    let total = markets.len();
-
-    Ok(Json(MarketsResponse { markets, total }))
+    Ok(Json(TradesResponse {
+        market_id,
+        outcome_id: query.outcome_id,
+        trades,
+    }))
 }
 
-/// Get orderbook for a symbol
-pub async fn get_orderbook(
+/// Get ticker/price info for a market
+/// GET /markets/:market_id/ticker
+pub async fn get_ticker(
     State(state): State<Arc<AppState>>,
-    Path(symbol): Path<String>,
-) -> Result<Json<OrderbookResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Normalize symbol format (supports BTC-USD, BTCUSDT, etc.)
-    let normalized_symbol = normalize_symbol(&symbol);
-    
-    // Validate market using dynamic symbol list
-    if !state.price_feed_service.is_valid_symbol(&normalized_symbol).await {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Unknown trading pair: {}", normalized_symbol),
-                code: "INVALID_MARKET".to_string(),
-            }),
-        ));
-    }
-
-    // Try to get orderbook from Redis cache first
-    if let Some(orderbook_cache) = state.cache.orderbook_opt() {
-        let cached = orderbook_cache.get_orderbook(&normalized_symbol, Some(20)).await;
-        if !cached.bids.is_empty() || !cached.asks.is_empty() {
-            // Convert PriceLevel to [String; 2] format
-            let bids: Vec<[String; 2]> = cached.bids
-                .iter()
-                .map(|level| [level.price.to_string(), level.amount.to_string()])
-                .collect();
-            let asks: Vec<[String; 2]> = cached.asks
-                .iter()
-                .map(|level| [level.price.to_string(), level.amount.to_string()])
-                .collect();
-
-            return Ok(Json(OrderbookResponse {
-                symbol: cached.symbol,
-                bids,
-                asks,
-                timestamp: cached.timestamp,
-            }));
-        }
-    }
-
-    // Fallback to matching engine if Redis cache is empty
-    match state.matching_engine.get_orderbook(&normalized_symbol, 20) {
-        Ok(snapshot) => Ok(Json(OrderbookResponse {
-            symbol: snapshot.symbol,
-            bids: snapshot.bids,
-            asks: snapshot.asks,
-            timestamp: snapshot.timestamp,
-        })),
-        Err(_) => Ok(Json(OrderbookResponse {
-            symbol: normalized_symbol,
-            bids: vec![],
-            asks: vec![],
-            timestamp: chrono::Utc::now().timestamp_millis(),
-        })),
-    }
-}
-
-/// Get recent trades for a symbol
-pub async fn get_trades(
-    State(state): State<Arc<AppState>>,
-    Path(symbol): Path<String>,
-) -> Result<Json<TradesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Normalize symbol format (supports BTC-USD, BTCUSDT, etc.)
-    let normalized_symbol = normalize_symbol(&symbol);
-    
-    // Validate market using dynamic symbol list
-    if !state.price_feed_service.is_valid_symbol(&normalized_symbol).await {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Unknown trading pair: {}", normalized_symbol),
-                code: "INVALID_MARKET".to_string(),
-            }),
-        ));
-    }
-
-    // Get trades from database
-    let rows: Vec<(String, Decimal, Decimal, String, i64)> = sqlx::query_as(
-        r#"
-        SELECT id::text, price, amount, side::text,
-               EXTRACT(EPOCH FROM created_at)::bigint * 1000 as timestamp
-        FROM trades
-        WHERE symbol = $1
-        ORDER BY created_at DESC
-        LIMIT 50
-        "#
+    Path(market_id): Path<Uuid>,
+) -> Result<Json<TickerResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Get market info
+    let market_data: Option<(Uuid, Decimal)> = sqlx::query_as(
+        "SELECT id, volume_24h FROM markets WHERE id = $1",
     )
-    .bind(&normalized_symbol)
+    .bind(market_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch market: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to fetch market".to_string(),
+                code: "MARKET_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let (_, volume_24h) = market_data.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Market not found".to_string(),
+                code: "MARKET_NOT_FOUND".to_string(),
+            }),
+        )
+    })?;
+
+    // Get outcomes with probabilities
+    let outcomes_data: Vec<(Uuid, String, Decimal)> = sqlx::query_as(
+        r#"
+        SELECT id, name, probability
+        FROM outcomes
+        WHERE market_id = $1
+        ORDER BY name
+        "#,
+    )
+    .bind(market_id)
     .fetch_all(&state.db.pool)
     .await
     .unwrap_or_default();
 
-    let trades: Vec<Trade> = rows
+    let outcomes: Vec<OutcomeTicker> = outcomes_data
         .into_iter()
-        .map(|(id, price, amount, side, timestamp)| Trade {
-            id,
-            price: price.to_string(),
-            amount: amount.to_string(),
-            side,
-            timestamp,
+        .map(|(outcome_id, name, probability)| {
+            // In prediction markets, Yes price = probability, No price = 1 - probability
+            let yes_price = probability;
+            let no_price = Decimal::ONE - probability;
+            OutcomeTicker {
+                outcome_id,
+                name,
+                yes_price,
+                no_price,
+                probability,
+            }
         })
         .collect();
 
-    Ok(Json(TradesResponse { symbol: normalized_symbol, trades }))
-}
-
-/// Get ticker for a symbol
-pub async fn get_ticker(
-    State(state): State<Arc<AppState>>,
-    Path(symbol): Path<String>,
-) -> Result<Json<TickerResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Normalize symbol format (supports BTC-USD, BTCUSDT, etc.)
-    let normalized_symbol = normalize_symbol(&symbol);
-    
-    // Validate market using dynamic symbol list
-    if !state.price_feed_service.is_valid_symbol(&normalized_symbol).await {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Unknown trading pair: {}", normalized_symbol),
-                code: "INVALID_MARKET".to_string(),
-            }),
-        ));
-    }
-
-    // Get real-time price data from price feed service
-    if let Some(price_data) = state.price_feed_service.get_price_data(&normalized_symbol).await {
-        return Ok(Json(TickerResponse {
-            symbol: normalized_symbol.clone(),
-            last_price: price_data.last_price,
-            price_change_24h: price_data.price_change_24h,
-            price_change_percent_24h: price_data.price_change_percent_24h,
-            high_24h: price_data.high_24h,
-            low_24h: price_data.low_24h,
-            volume_24h: price_data.volume_ccy_24h,
-            open_interest: Decimal::ZERO,
-            funding_rate: price_data.funding_rate,
-            next_funding_time: price_data.next_funding_time / 1000,
-        }));
-    }
-
-    // Fallback to database if price feed not available
-    let last_price: Option<Decimal> = sqlx::query_scalar(
-        "SELECT price FROM trades WHERE symbol = $1 ORDER BY created_at DESC LIMIT 1"
-    )
-    .bind(&normalized_symbol)
-    .fetch_optional(&state.db.pool)
-    .await
-    .ok()
-    .flatten();
-
-    // Get 24h stats
-    let stats: Option<(Decimal, Decimal, Decimal)> = sqlx::query_as(
-        r#"
-        SELECT
-            COALESCE(MAX(price), 0) as high,
-            COALESCE(MIN(price), 0) as low,
-            COALESCE(SUM(amount * price), 0) as volume
-        FROM trades
-        WHERE symbol = $1
-        AND created_at > NOW() - INTERVAL '24 hours'
-        "#
-    )
-    .bind(&normalized_symbol)
-    .fetch_optional(&state.db.pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (high_24h, low_24h, volume_24h) = stats.unwrap_or((Decimal::ZERO, Decimal::ZERO, Decimal::ZERO));
-
     Ok(Json(TickerResponse {
-        symbol: normalized_symbol,
-        last_price: last_price.unwrap_or(Decimal::ZERO),
-        price_change_24h: Decimal::ZERO,
-        price_change_percent_24h: Decimal::ZERO,
-        high_24h,
-        low_24h,
+        market_id,
+        outcomes,
         volume_24h,
-        open_interest: Decimal::ZERO,
-        funding_rate: Decimal::new(1, 4), // 0.01%
-        next_funding_time: chrono::Utc::now().timestamp() + 3600,
+        updated_at: chrono::Utc::now().timestamp_millis(),
     }))
 }
 
-/// Get real-time price data for a symbol (from OKX)
+/// Get price for a specific outcome
+/// GET /markets/:market_id/price
 pub async fn get_price(
     State(state): State<Arc<AppState>>,
-    Path(symbol): Path<String>,
-) -> Result<Json<PriceResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Normalize symbol format (supports BTC-USD, BTCUSDT, etc.)
-    let normalized_symbol = normalize_symbol(&symbol);
-    
-    // Validate market using dynamic symbol list
-    if !state.price_feed_service.is_valid_symbol(&normalized_symbol).await {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Unknown trading pair: {}", normalized_symbol),
-                code: "INVALID_MARKET".to_string(),
-            }),
-        ));
-    }
-
-    // Get price data from price feed service
-    match state.price_feed_service.get_price_data(&normalized_symbol).await {
-        Some(data) => Ok(Json(PriceResponse {
-            symbol: normalized_symbol,
-            mark_price: data.mark_price,
-            index_price: data.index_price,
-            last_price: data.last_price,
-            bid_price: data.bid_price,
-            ask_price: data.ask_price,
-            funding_rate: data.funding_rate,
-            next_funding_rate: data.next_funding_rate,
-            next_funding_time: data.next_funding_time,
-            updated_at: data.updated_at,
-        })),
-        None => Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "Price data temporarily unavailable".to_string(),
-                code: "PRICE_DATA_UNAVAILABLE".to_string(),
-            }),
-        )),
-    }
+    Path(market_id): Path<Uuid>,
+) -> Result<Json<TickerResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Same as ticker for now
+    get_ticker(State(state), Path(market_id)).await
 }
