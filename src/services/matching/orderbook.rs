@@ -483,6 +483,126 @@ impl Orderbook {
             .map(|q| q.iter().cloned().collect())
             .unwrap_or_default()
     }
+
+    // ========================================================================
+    // Mint/Merge Matching Support
+    // ========================================================================
+
+    /// Get buy orders with price >= min_price for Mint matching
+    ///
+    /// Returns orders sorted by price descending (best price first)
+    /// Used when matching against complement orderbook's buy orders
+    pub fn get_matching_buy_orders(&self, min_price: Decimal) -> Vec<OrderEntry> {
+        let min_level = PriceLevel::from_decimal(min_price);
+        let bids = self.bids.read();
+
+        let mut orders = Vec::new();
+        // Iterate from highest to lowest price
+        for (price_level, queue) in bids.iter().rev() {
+            if *price_level >= min_level {
+                for order in queue.iter() {
+                    orders.push(order.clone());
+                }
+            } else {
+                // Since we're iterating in descending order, we can break early
+                break;
+            }
+        }
+
+        orders
+    }
+
+    /// Get sell orders with price <= max_price for Merge matching
+    ///
+    /// Returns orders sorted by price ascending (best price first)
+    /// Used when matching against complement orderbook's sell orders
+    pub fn get_matching_sell_orders(&self, max_price: Decimal) -> Vec<OrderEntry> {
+        let max_level = PriceLevel::from_decimal(max_price);
+        let asks = self.asks.read();
+
+        let mut orders = Vec::new();
+        // Iterate from lowest to highest price
+        for (price_level, queue) in asks.iter() {
+            if *price_level <= max_level {
+                for order in queue.iter() {
+                    orders.push(order.clone());
+                }
+            } else {
+                // Since we're iterating in ascending order, we can break early
+                break;
+            }
+        }
+
+        orders
+    }
+
+    /// Fill an order by a specific amount
+    ///
+    /// Used by Mint/Merge matching to update maker orders in the complement orderbook
+    pub fn fill_order(&self, order_id: Uuid, fill_amount: Decimal) -> bool {
+        // Find the order in index
+        let entry = match self.order_index.get(&order_id) {
+            Some(e) => e.clone(),
+            None => return false,
+        };
+
+        let (side, price_level) = entry;
+
+        match side {
+            Side::Buy => {
+                let mut bids = self.bids.write();
+                if let Some(queue) = bids.get_mut(&price_level) {
+                    for order in queue.iter_mut() {
+                        if order.id == order_id {
+                            order.remaining_amount -= fill_amount;
+
+                            // Remove if fully filled
+                            if order.remaining_amount <= Decimal::ZERO {
+                                let pos = queue.iter().position(|o| o.id == order_id);
+                                if let Some(pos) = pos {
+                                    queue.remove(pos);
+                                }
+                                self.order_index.remove(&order_id);
+                                self.order_count.fetch_sub(1, AtomicOrdering::Relaxed);
+
+                                if queue.is_empty() {
+                                    bids.remove(&price_level);
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+            Side::Sell => {
+                let mut asks = self.asks.write();
+                if let Some(queue) = asks.get_mut(&price_level) {
+                    for order in queue.iter_mut() {
+                        if order.id == order_id {
+                            order.remaining_amount -= fill_amount;
+
+                            // Remove if fully filled
+                            if order.remaining_amount <= Decimal::ZERO {
+                                let pos = queue.iter().position(|o| o.id == order_id);
+                                if let Some(pos) = pos {
+                                    queue.remove(pos);
+                                }
+                                self.order_index.remove(&order_id);
+                                self.order_count.fetch_sub(1, AtomicOrdering::Relaxed);
+
+                                if queue.is_empty() {
+                                    asks.remove(&price_level);
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]

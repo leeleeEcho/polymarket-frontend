@@ -402,6 +402,34 @@ impl TradeEvent {
             timestamp: chrono::Utc::now().timestamp_millis(),
         }
     }
+
+    /// Create a TradeEvent from a TradeExecution
+    pub fn from_execution(execution: &TradeExecution, symbol: String, taker_address: String, side: Side) -> Self {
+        Self {
+            symbol,
+            market_id: execution.market_id,
+            outcome_id: execution.outcome_id,
+            share_type: execution.share_type,
+            match_type: execution.match_type,
+            trade_id: execution.trade_id,
+            maker_order_id: execution.maker_order_id,
+            taker_order_id: execution.taker_order_id,
+            maker_address: execution.maker_address.clone(),
+            taker_address,
+            side: side.to_string(),
+            price: execution.price,
+            amount: execution.amount,
+            maker_fee: execution.maker_fee,
+            taker_fee: execution.taker_fee,
+            timestamp: execution.timestamp,
+        }
+    }
+
+    /// Set the match type
+    pub fn with_match_type(mut self, match_type: MatchType) -> Self {
+        self.match_type = match_type;
+        self
+    }
 }
 
 // ============================================================================

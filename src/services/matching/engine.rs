@@ -2,10 +2,18 @@
 //!
 //! High-performance order matching engine with concurrent access support.
 //! Manages multiple orderbooks for different trading pairs.
+//!
+//! # Prediction Market Matching
+//!
+//! Supports three types of matching:
+//! - **Normal**: Same share type, opposite sides (Yes buy vs Yes sell)
+//! - **Mint**: Two buys for complementary shares (Yes buy + No buy → new shares)
+//! - **Merge**: Two sells for complementary shares (Yes sell + No sell → collateral)
 
 use super::history::HistoryManager;
 use super::orderbook::Orderbook;
 use super::types::*;
+use crate::models::market::ShareType;
 use dashmap::DashMap;
 use rust_decimal::Decimal;
 use std::sync::Arc;
@@ -125,10 +133,201 @@ impl MatchingEngine {
     }
 
     // ========================================================================
+    // Complement Orderbook (for Mint/Merge matching)
+    // ========================================================================
+
+    /// Parse market key into components
+    fn parse_market_key(market_key: &str) -> Option<(Uuid, Uuid, ShareType)> {
+        OrderbookSnapshot::parse_market_key(market_key)
+    }
+
+    /// Get the complement market key (Yes ↔ No)
+    fn get_complement_market_key(market_key: &str) -> Option<String> {
+        let (market_id, outcome_id, share_type) = Self::parse_market_key(market_key)?;
+        let complement_type = share_type.complement();
+        Some(format!("{}:{}:{}", market_id, outcome_id, complement_type))
+    }
+
+    /// Get or create the complement orderbook
+    fn get_or_create_complement_orderbook(&self, market_key: &str) -> Option<Arc<Orderbook>> {
+        let complement_key = Self::get_complement_market_key(market_key)?;
+        let orderbook = self.orderbooks
+            .entry(complement_key.clone())
+            .or_insert_with(|| Arc::new(Orderbook::new(complement_key)))
+            .clone();
+        Some(orderbook)
+    }
+
+    /// Try Mint matching: match taker buy order against complement orderbook's buy orders
+    ///
+    /// Mint matching occurs when:
+    /// - Taker wants to buy Yes shares at price P_yes
+    /// - Maker wants to buy No shares at price P_no
+    /// - P_yes + P_no >= 1.0 (combined willingness to pay covers minting cost)
+    ///
+    /// Example: Taker buys 100 Yes @ 0.65, Maker buys 100 No @ 0.40
+    /// Combined: 0.65 + 0.40 = 1.05 >= 1.0 ✓
+    /// Result: Mint 100 (Yes, No) pairs, taker gets Yes, maker gets No
+    fn try_mint_match(
+        &self,
+        taker_order_id: Uuid,
+        taker_address: &str,
+        taker_share_type: ShareType,
+        taker_market_key: &str,
+        complement_orderbook: &Orderbook,
+        taker_price: Decimal,
+        mut remaining_amount: Decimal,
+    ) -> (Vec<TradeExecution>, Decimal) {
+        let mut trades = Vec::new();
+        let complement_price = Decimal::ONE - taker_price;
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // Parse market_key for trade records
+        let (market_id, outcome_id, _) = Self::parse_market_key(taker_market_key)
+            .unwrap_or((Uuid::nil(), Uuid::nil(), ShareType::Yes));
+
+        // Look for buy orders in complement orderbook that can mint with us
+        // We need: taker_price + maker_price >= 1.0
+        // So maker_price >= 1.0 - taker_price = complement_price
+        //
+        // In the complement orderbook, buy orders are stored in bids
+        // We look for bids at price >= complement_price
+        let matching_orders = complement_orderbook.get_matching_buy_orders(complement_price);
+
+        for maker_order in matching_orders {
+            if remaining_amount <= Decimal::ZERO {
+                break;
+            }
+
+            // Calculate trade amount
+            let trade_amount = remaining_amount.min(maker_order.remaining_amount);
+
+            // Calculate fees
+            let taker_fee = self.fee_config.calculate_taker_fee(taker_price, trade_amount);
+            let maker_fee = self.fee_config.calculate_maker_fee(maker_order.price, trade_amount);
+
+            let trade = TradeExecution {
+                trade_id: Uuid::new_v4(),
+                market_id,
+                outcome_id,
+                share_type: taker_share_type,
+                match_type: MatchType::Mint,
+                maker_order_id: maker_order.id,
+                taker_order_id,
+                maker_address: maker_order.user_address.clone(),
+                price: taker_price, // Taker pays their price
+                amount: trade_amount,
+                maker_fee,
+                taker_fee,
+                timestamp: now,
+            };
+
+            trades.push(trade);
+            remaining_amount -= trade_amount;
+
+            // Update maker order in complement orderbook
+            complement_orderbook.fill_order(maker_order.id, trade_amount);
+
+            debug!(
+                "🔨 MINT match: {} {} @ {:.4} + {} No @ {:.4} = {} pairs",
+                trade_amount, taker_share_type, taker_price,
+                trade_amount, maker_order.price, trade_amount
+            );
+        }
+
+        (trades, remaining_amount)
+    }
+
+    /// Try Merge matching: match taker sell order against complement orderbook's sell orders
+    ///
+    /// Merge matching occurs when:
+    /// - Taker wants to sell Yes shares at price P_yes
+    /// - Maker wants to sell No shares at price P_no
+    /// - P_yes + P_no <= 1.0 (combined receive <= redemption value)
+    ///
+    /// Example: Taker sells 100 Yes @ 0.55, Maker sells 100 No @ 0.40
+    /// Combined: 0.55 + 0.40 = 0.95 <= 1.0 ✓
+    /// Result: Merge 100 (Yes, No) pairs → redeem 100 USDC
+    fn try_merge_match(
+        &self,
+        taker_order_id: Uuid,
+        taker_address: &str,
+        taker_share_type: ShareType,
+        taker_market_key: &str,
+        complement_orderbook: &Orderbook,
+        taker_price: Decimal,
+        mut remaining_amount: Decimal,
+    ) -> (Vec<TradeExecution>, Decimal) {
+        let mut trades = Vec::new();
+        let complement_price = Decimal::ONE - taker_price;
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // Parse market_key for trade records
+        let (market_id, outcome_id, _) = Self::parse_market_key(taker_market_key)
+            .unwrap_or((Uuid::nil(), Uuid::nil(), ShareType::Yes));
+
+        // Look for sell orders in complement orderbook that can merge with us
+        // We need: taker_price + maker_price <= 1.0
+        // So maker_price <= 1.0 - taker_price = complement_price
+        //
+        // In the complement orderbook, sell orders are stored in asks
+        // We look for asks at price <= complement_price
+        let matching_orders = complement_orderbook.get_matching_sell_orders(complement_price);
+
+        for maker_order in matching_orders {
+            if remaining_amount <= Decimal::ZERO {
+                break;
+            }
+
+            // Calculate trade amount
+            let trade_amount = remaining_amount.min(maker_order.remaining_amount);
+
+            // Calculate fees
+            let taker_fee = self.fee_config.calculate_taker_fee(taker_price, trade_amount);
+            let maker_fee = self.fee_config.calculate_maker_fee(maker_order.price, trade_amount);
+
+            let trade = TradeExecution {
+                trade_id: Uuid::new_v4(),
+                market_id,
+                outcome_id,
+                share_type: taker_share_type,
+                match_type: MatchType::Merge,
+                maker_order_id: maker_order.id,
+                taker_order_id,
+                maker_address: maker_order.user_address.clone(),
+                price: taker_price, // Taker receives their price
+                amount: trade_amount,
+                maker_fee,
+                taker_fee,
+                timestamp: now,
+            };
+
+            trades.push(trade);
+            remaining_amount -= trade_amount;
+
+            // Update maker order in complement orderbook
+            complement_orderbook.fill_order(maker_order.id, trade_amount);
+
+            debug!(
+                "🔄 MERGE match: {} {} @ {:.4} + {} No @ {:.4} → {} USDC",
+                trade_amount, taker_share_type, taker_price,
+                trade_amount, maker_order.price, trade_amount
+            );
+        }
+
+        (trades, remaining_amount)
+    }
+
+    // ========================================================================
     // Order Operations
     // ========================================================================
 
     /// Submit an order for matching
+    ///
+    /// This method implements the full prediction market matching logic:
+    /// 1. **Normal matching**: Match against opposite side in same orderbook
+    /// 2. **Mint matching** (for buy orders): Match against buy orders in complement orderbook
+    /// 3. **Merge matching** (for sell orders): Match against sell orders in complement orderbook
     pub fn submit_order(
         &self,
         order_id: Uuid,
@@ -163,8 +362,15 @@ impl MatchingEngine {
             order_id, symbol, side, order_type, amount, price
         );
 
-        // Match the order
-        let (trades, remaining) = orderbook.match_order(
+        // Parse share type from symbol for Mint/Merge matching
+        let share_type = Self::parse_market_key(symbol)
+            .map(|(_, _, st)| st)
+            .unwrap_or(ShareType::Yes);
+
+        // ========================================================================
+        // Step 1: Normal matching (same share type, opposite sides)
+        // ========================================================================
+        let (mut trades, mut remaining) = orderbook.match_order(
             order_id,
             user_address,
             side,
@@ -173,36 +379,105 @@ impl MatchingEngine {
             &self.fee_config,
         );
 
+        // ========================================================================
+        // Step 2: Mint/Merge matching (complement orderbook)
+        // ========================================================================
+        // Only try Mint/Merge if:
+        // - There's remaining amount
+        // - Order has a price (limit order)
+        // - We can find/create the complement orderbook
+        if remaining > Decimal::ZERO && price.is_some() {
+            if let Some(complement_orderbook) = self.get_or_create_complement_orderbook(symbol) {
+                let taker_price = price.unwrap();
+
+                match side {
+                    Side::Buy => {
+                        // Try Mint matching: match our buy against complement's buy orders
+                        let (mint_trades, new_remaining) = self.try_mint_match(
+                            order_id,
+                            user_address,
+                            share_type,
+                            symbol,
+                            &complement_orderbook,
+                            taker_price,
+                            remaining,
+                        );
+
+                        if !mint_trades.is_empty() {
+                            info!(
+                                "🔨 MINT matched {} trades, filled {} shares",
+                                mint_trades.len(),
+                                remaining - new_remaining
+                            );
+                            trades.extend(mint_trades);
+                            remaining = new_remaining;
+
+                            // Broadcast complement orderbook update
+                            if let Some(complement_key) = Self::get_complement_market_key(symbol) {
+                                self.broadcast_orderbook_update(&complement_key);
+                            }
+                        }
+                    }
+                    Side::Sell => {
+                        // Try Merge matching: match our sell against complement's sell orders
+                        let (merge_trades, new_remaining) = self.try_merge_match(
+                            order_id,
+                            user_address,
+                            share_type,
+                            symbol,
+                            &complement_orderbook,
+                            taker_price,
+                            remaining,
+                        );
+
+                        if !merge_trades.is_empty() {
+                            info!(
+                                "🔄 MERGE matched {} trades, redeemed {} shares",
+                                merge_trades.len(),
+                                remaining - new_remaining
+                            );
+                            trades.extend(merge_trades);
+                            remaining = new_remaining;
+
+                            // Broadcast complement orderbook update
+                            if let Some(complement_key) = Self::get_complement_market_key(symbol) {
+                                self.broadcast_orderbook_update(&complement_key);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let filled_amount = amount - remaining;
 
         // Broadcast trade events
         for trade in &trades {
-            let event = TradeEvent::new(
+            // Use from_execution to preserve match_type (Normal/Mint/Merge)
+            let event = TradeEvent::from_execution(
+                trade,
                 symbol.to_string(),
-                trade.trade_id,
-                trade.maker_order_id,
-                trade.taker_order_id,
-                trade.maker_address.clone(),
                 user_address.to_string(),
                 side,
-                trade.price,
-                trade.amount,
-                trade.maker_fee,
-                trade.taker_fee,
             );
 
             // Broadcast with detailed logging
+            let match_type_str = match trade.match_type {
+                MatchType::Normal => "NORMAL",
+                MatchType::Mint => "🔨 MINT",
+                MatchType::Merge => "🔄 MERGE",
+            };
             match self.trade_sender.send(event.clone()) {
                 Ok(n) => {
                     info!(
-                        "📊 Trade broadcast to {} subscribers: symbol={}, price={}, amount={}, side={}",
-                        n, event.symbol, event.price, event.amount, event.side
+                        "📊 {} Trade broadcast to {} subscribers: symbol={}, price={}, amount={}, side={}",
+                        match_type_str, n, event.symbol, event.price, event.amount, event.side
                     );
                 }
                 Err(e) => {
                     warn!(
-                        "⚠️  Failed to broadcast trade (no subscribers?): {} - symbol={}, price={}",
-                        e, event.symbol, event.price
+                        "⚠️  Failed to broadcast {} trade (no subscribers?): {} - symbol={}, price={}",
+                        match_type_str, e, event.symbol, event.price
                     );
                 }
             }
@@ -677,7 +952,142 @@ mod tests {
         engine.submit_order(Uuid::new_v4(), &market_key2, "0x2", Side::Sell, OrderType::Limit, dec!(200.0), Some(dec!(0.65)), 1).unwrap();
 
         let stats = engine.stats();
-        assert_eq!(stats.symbols_count, 2);
+        // With Mint/Merge support, complement orderbooks are also created
+        // So we have 4 orderbooks: 2 original + 2 complements (Yes <-> No)
+        assert_eq!(stats.symbols_count, 4);
         assert_eq!(stats.total_orders_in_book, 2);
+    }
+
+    #[test]
+    fn test_mint_matching() {
+        let engine = MatchingEngine::new();
+
+        // Create market keys for Yes and No
+        let market_id = Uuid::new_v4();
+        let outcome_id = Uuid::new_v4();
+        let yes_market_key = format!("{}:{}:yes", market_id, outcome_id);
+        let no_market_key = format!("{}:{}:no", market_id, outcome_id);
+
+        // User A submits buy order for No shares at 0.40
+        let order_a = engine.submit_order(
+            Uuid::new_v4(),
+            &no_market_key,
+            "0xUserA",
+            Side::Buy,
+            OrderType::Limit,
+            dec!(100.0),
+            Some(dec!(0.40)),
+            1,
+        ).unwrap();
+
+        // Order should be open (no match yet)
+        assert_eq!(order_a.status, OrderStatus::Open);
+        assert_eq!(order_a.filled_amount, dec!(0));
+
+        // User B submits buy order for Yes shares at 0.65
+        // Combined: 0.65 + 0.40 = 1.05 >= 1.0, should trigger MINT
+        let order_b = engine.submit_order(
+            Uuid::new_v4(),
+            &yes_market_key,
+            "0xUserB",
+            Side::Buy,
+            OrderType::Limit,
+            dec!(100.0),
+            Some(dec!(0.65)),
+            1,
+        ).unwrap();
+
+        // Should be filled via MINT matching
+        assert_eq!(order_b.status, OrderStatus::Filled);
+        assert_eq!(order_b.filled_amount, dec!(100.0));
+        assert_eq!(order_b.trades.len(), 1);
+        assert_eq!(order_b.trades[0].match_type, MatchType::Mint);
+    }
+
+    #[test]
+    fn test_merge_matching() {
+        let engine = MatchingEngine::new();
+
+        // Create market keys for Yes and No
+        let market_id = Uuid::new_v4();
+        let outcome_id = Uuid::new_v4();
+        let yes_market_key = format!("{}:{}:yes", market_id, outcome_id);
+        let no_market_key = format!("{}:{}:no", market_id, outcome_id);
+
+        // User A submits sell order for No shares at 0.35
+        let order_a = engine.submit_order(
+            Uuid::new_v4(),
+            &no_market_key,
+            "0xUserA",
+            Side::Sell,
+            OrderType::Limit,
+            dec!(100.0),
+            Some(dec!(0.35)),
+            1,
+        ).unwrap();
+
+        // Order should be open (no match yet)
+        assert_eq!(order_a.status, OrderStatus::Open);
+        assert_eq!(order_a.filled_amount, dec!(0));
+
+        // User B submits sell order for Yes shares at 0.60
+        // Combined: 0.60 + 0.35 = 0.95 <= 1.0, should trigger MERGE
+        let order_b = engine.submit_order(
+            Uuid::new_v4(),
+            &yes_market_key,
+            "0xUserB",
+            Side::Sell,
+            OrderType::Limit,
+            dec!(100.0),
+            Some(dec!(0.60)),
+            1,
+        ).unwrap();
+
+        // Should be filled via MERGE matching
+        assert_eq!(order_b.status, OrderStatus::Filled);
+        assert_eq!(order_b.filled_amount, dec!(100.0));
+        assert_eq!(order_b.trades.len(), 1);
+        assert_eq!(order_b.trades[0].match_type, MatchType::Merge);
+    }
+
+    #[test]
+    fn test_mint_not_triggered_when_prices_too_low() {
+        let engine = MatchingEngine::new();
+
+        // Create market keys for Yes and No
+        let market_id = Uuid::new_v4();
+        let outcome_id = Uuid::new_v4();
+        let yes_market_key = format!("{}:{}:yes", market_id, outcome_id);
+        let no_market_key = format!("{}:{}:no", market_id, outcome_id);
+
+        // User A submits buy order for No shares at 0.30
+        engine.submit_order(
+            Uuid::new_v4(),
+            &no_market_key,
+            "0xUserA",
+            Side::Buy,
+            OrderType::Limit,
+            dec!(100.0),
+            Some(dec!(0.30)),
+            1,
+        ).unwrap();
+
+        // User B submits buy order for Yes shares at 0.60
+        // Combined: 0.60 + 0.30 = 0.90 < 1.0, should NOT trigger MINT
+        let order_b = engine.submit_order(
+            Uuid::new_v4(),
+            &yes_market_key,
+            "0xUserB",
+            Side::Buy,
+            OrderType::Limit,
+            dec!(100.0),
+            Some(dec!(0.60)),
+            1,
+        ).unwrap();
+
+        // Should be open (no MINT match because prices sum to < 1.0)
+        assert_eq!(order_b.status, OrderStatus::Open);
+        assert_eq!(order_b.filled_amount, dec!(0));
+        assert!(order_b.trades.is_empty());
     }
 }
