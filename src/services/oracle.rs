@@ -14,6 +14,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::services::chainlink::{ChainlinkClient, ThresholdComparison};
 use crate::services::matching::MatchingEngine;
 
 /// Oracle error types
@@ -77,6 +78,7 @@ pub struct PriceOracle {
     pool: PgPool,
     matching_engine: Arc<MatchingEngine>,
     price_sender: broadcast::Sender<PriceUpdateEvent>,
+    chainlink_client: Option<Arc<ChainlinkClient>>,
 }
 
 impl PriceOracle {
@@ -87,7 +89,33 @@ impl PriceOracle {
             pool,
             matching_engine,
             price_sender,
+            chainlink_client: None,
         }
+    }
+
+    /// Create a new PriceOracle with Chainlink integration
+    pub fn with_chainlink(
+        pool: PgPool,
+        matching_engine: Arc<MatchingEngine>,
+        chainlink_client: ChainlinkClient,
+    ) -> Self {
+        let (price_sender, _) = broadcast::channel(1000);
+        Self {
+            pool,
+            matching_engine,
+            price_sender,
+            chainlink_client: Some(Arc::new(chainlink_client)),
+        }
+    }
+
+    /// Set Chainlink client
+    pub fn set_chainlink_client(&mut self, client: ChainlinkClient) {
+        self.chainlink_client = Some(Arc::new(client));
+    }
+
+    /// Check if Chainlink is available
+    pub fn has_chainlink(&self) -> bool {
+        self.chainlink_client.is_some()
     }
 
     /// Subscribe to price updates
@@ -199,13 +227,19 @@ impl PriceOracle {
         self.update_probability(market_id, outcome_id, probability, PriceSource::Manual).await
     }
 
-    /// Fetch probability from external oracle (placeholder for integration)
+    /// Fetch probability from external oracle
+    ///
+    /// For Chainlink, the resolution_source should be in format:
+    /// - "chainlink:BTC/USD>100000" - Price threshold comparison
+    /// - "chainlink:ETH/USD<2000" - Price below threshold
+    ///
+    /// Returns probability based on current price vs threshold
     pub async fn fetch_from_external(
         &self,
         market_id: Uuid,
         oracle_name: &str,
     ) -> Result<Decimal, OracleError> {
-        // Verify market exists
+        // Verify market exists and get resolution source
         let market: Option<(Uuid, String)> = sqlx::query_as(
             "SELECT id, resolution_source FROM markets WHERE id = $1"
         )
@@ -213,16 +247,11 @@ impl PriceOracle {
         .fetch_optional(&self.pool)
         .await?;
 
-        let (_, _resolution_source) = market.ok_or(OracleError::MarketNotFound(market_id))?;
+        let (_, resolution_source) = market.ok_or(OracleError::MarketNotFound(market_id))?;
 
-        // TODO: Implement actual oracle integrations
-        // For now, this is a placeholder that returns an error
         match oracle_name.to_lowercase().as_str() {
             "chainlink" => {
-                warn!("Chainlink oracle not yet implemented for market {}", market_id);
-                Err(OracleError::ExternalOracleError(
-                    "Chainlink integration not yet implemented".to_string()
-                ))
+                self.fetch_from_chainlink(market_id, &resolution_source).await
             }
             "uma" => {
                 warn!("UMA oracle not yet implemented for market {}", market_id);
@@ -242,6 +271,148 @@ impl PriceOracle {
                 ))
             }
         }
+    }
+
+    /// Fetch price data from Chainlink and calculate probability
+    ///
+    /// Resolution source format: "chainlink:FEED>THRESHOLD" or "chainlink:FEED<THRESHOLD"
+    /// Examples:
+    /// - "chainlink:BTC/USD>100000" -> Will BTC exceed $100,000?
+    /// - "chainlink:ETH/USD<2000"   -> Will ETH drop below $2,000?
+    async fn fetch_from_chainlink(
+        &self,
+        market_id: Uuid,
+        resolution_source: &str,
+    ) -> Result<Decimal, OracleError> {
+        let client = self.chainlink_client.as_ref().ok_or_else(|| {
+            OracleError::ExternalOracleError("Chainlink client not configured".to_string())
+        })?;
+
+        // Parse resolution source: "chainlink:BTC/USD>100000"
+        let source = resolution_source.trim().to_lowercase();
+
+        // Remove "chainlink:" prefix if present
+        let criteria = if source.starts_with("chainlink:") {
+            &source[10..]
+        } else {
+            &source
+        };
+
+        // Parse the criteria: FEED>THRESHOLD or FEED<THRESHOLD
+        let (feed, threshold, comparison) = if let Some(pos) = criteria.find('>') {
+            let feed = criteria[..pos].trim().to_uppercase();
+            let threshold_str = criteria[pos + 1..].trim();
+            let threshold: Decimal = threshold_str.parse().map_err(|_| {
+                OracleError::ExternalOracleError(
+                    format!("Invalid threshold value: {}", threshold_str)
+                )
+            })?;
+            (feed, threshold, ThresholdComparison::Greater)
+        } else if let Some(pos) = criteria.find('<') {
+            let feed = criteria[..pos].trim().to_uppercase();
+            let threshold_str = criteria[pos + 1..].trim();
+            let threshold: Decimal = threshold_str.parse().map_err(|_| {
+                OracleError::ExternalOracleError(
+                    format!("Invalid threshold value: {}", threshold_str)
+                )
+            })?;
+            (feed, threshold, ThresholdComparison::Less)
+        } else {
+            return Err(OracleError::ExternalOracleError(
+                format!("Invalid resolution source format: {}. Expected format: FEED>THRESHOLD or FEED<THRESHOLD", resolution_source)
+            ));
+        };
+
+        info!(
+            "Fetching Chainlink price for market {}: {} {:?} {}",
+            market_id, &feed, comparison, threshold
+        );
+
+        // Fetch price from Chainlink (try any available network)
+        let price_data = client.get_price_any_network(&feed).await.map_err(|e| {
+            error!("Chainlink price fetch failed for {}: {}", &feed, e);
+            OracleError::ExternalOracleError(format!("Chainlink error: {}", e))
+        })?;
+
+        info!(
+            "Chainlink price for {}: {} USD (from {})",
+            &feed, price_data.price, price_data.network
+        );
+
+        // Check threshold condition and return probability
+        // If condition is met -> high probability (0.95)
+        // If condition is not met -> calculate probability based on distance from threshold
+        let probability = match comparison {
+            ThresholdComparison::Greater => {
+                if price_data.price > threshold {
+                    Decimal::new(95, 2) // 0.95 - very likely
+                } else {
+                    // Calculate probability based on how close we are to threshold
+                    // Closer to threshold = higher probability
+                    let ratio = price_data.price / threshold;
+                    let base_prob = ratio * Decimal::new(50, 2); // Scale to 0-50%
+                    base_prob.max(Decimal::new(5, 2)).min(Decimal::new(50, 2))
+                }
+            }
+            ThresholdComparison::Less => {
+                if price_data.price < threshold {
+                    Decimal::new(95, 2) // 0.95 - very likely
+                } else {
+                    // Calculate inverse probability
+                    let ratio = threshold / price_data.price;
+                    let base_prob = ratio * Decimal::new(50, 2);
+                    base_prob.max(Decimal::new(5, 2)).min(Decimal::new(50, 2))
+                }
+            }
+            ThresholdComparison::GreaterOrEqual => {
+                if price_data.price >= threshold {
+                    Decimal::new(95, 2)
+                } else {
+                    let ratio = price_data.price / threshold;
+                    let base_prob = ratio * Decimal::new(50, 2);
+                    base_prob.max(Decimal::new(5, 2)).min(Decimal::new(50, 2))
+                }
+            }
+            ThresholdComparison::LessOrEqual => {
+                if price_data.price <= threshold {
+                    Decimal::new(95, 2)
+                } else {
+                    let ratio = threshold / price_data.price;
+                    let base_prob = ratio * Decimal::new(50, 2);
+                    base_prob.max(Decimal::new(5, 2)).min(Decimal::new(50, 2))
+                }
+            }
+            ThresholdComparison::Equal => {
+                // Exact equality is rare with prices, use a small range
+                let diff = (price_data.price - threshold).abs();
+                let tolerance = threshold * Decimal::new(1, 3); // 0.1% tolerance
+                if diff <= tolerance {
+                    Decimal::new(95, 2)
+                } else {
+                    Decimal::new(5, 2)
+                }
+            }
+        };
+
+        debug!(
+            "Market {} probability from Chainlink: {} (price={}, threshold={}, {:?})",
+            market_id, probability, price_data.price, threshold, comparison
+        );
+
+        Ok(probability)
+    }
+
+    /// Get Chainlink price data directly (for API exposure)
+    pub async fn get_chainlink_price(&self, feed: &str) -> Result<Decimal, OracleError> {
+        let client = self.chainlink_client.as_ref().ok_or_else(|| {
+            OracleError::ExternalOracleError("Chainlink client not configured".to_string())
+        })?;
+
+        let price_data = client.get_price_any_network(feed).await.map_err(|e| {
+            OracleError::ExternalOracleError(format!("Chainlink error: {}", e))
+        })?;
+
+        Ok(price_data.price)
     }
 
     /// Batch update all market probabilities from orderbook

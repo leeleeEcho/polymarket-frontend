@@ -1,5 +1,7 @@
 use serde::Deserialize;
-// use std::collections::HashMap;
+use std::collections::HashMap;
+
+use crate::services::chainlink::{ChainlinkClient, Network};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
@@ -99,6 +101,27 @@ pub struct AppConfig {
     // Block sync settings
     #[serde(default = "default_block_sync_lookback")]
     pub block_sync_lookback: u64,
+
+    // Chainlink Oracle RPC URLs (optional)
+    #[serde(default)]
+    pub chainlink_ethereum_mainnet_rpc: Option<String>,
+
+    #[serde(default)]
+    pub chainlink_ethereum_sepolia_rpc: Option<String>,
+
+    #[serde(default)]
+    pub chainlink_polygon_mainnet_rpc: Option<String>,
+
+    #[serde(default)]
+    pub chainlink_polygon_mumbai_rpc: Option<String>,
+
+    // Maximum age of Chainlink price data (in seconds) before considered stale
+    #[serde(default = "default_chainlink_max_price_age")]
+    pub chainlink_max_price_age: u64,
+}
+
+fn default_chainlink_max_price_age() -> u64 {
+    3600 // 1 hour
 }
 
 fn default_weth_address() -> String {
@@ -257,5 +280,54 @@ impl AppConfig {
     /// Check if auth is disabled (for development)
     pub fn is_auth_disabled(&self) -> bool {
         self.auth_disabled
+    }
+
+    /// Create a ChainlinkClient with configured RPC URLs
+    pub fn create_chainlink_client(&self) -> Option<ChainlinkClient> {
+        let mut rpc_urls = HashMap::new();
+
+        if let Some(ref url) = self.chainlink_ethereum_mainnet_rpc {
+            if !url.is_empty() {
+                rpc_urls.insert(Network::EthereumMainnet, url.clone());
+            }
+        }
+
+        if let Some(ref url) = self.chainlink_ethereum_sepolia_rpc {
+            if !url.is_empty() {
+                rpc_urls.insert(Network::EthereumSepolia, url.clone());
+            }
+        }
+
+        if let Some(ref url) = self.chainlink_polygon_mainnet_rpc {
+            if !url.is_empty() {
+                rpc_urls.insert(Network::PolygonMainnet, url.clone());
+            }
+        }
+
+        if let Some(ref url) = self.chainlink_polygon_mumbai_rpc {
+            if !url.is_empty() {
+                rpc_urls.insert(Network::PolygonMumbai, url.clone());
+            }
+        }
+
+        if rpc_urls.is_empty() {
+            return None;
+        }
+
+        match ChainlinkClient::new(rpc_urls) {
+            Ok(client) => Some(client.with_max_price_age(self.chainlink_max_price_age)),
+            Err(e) => {
+                tracing::error!("Failed to create Chainlink client: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Check if Chainlink is configured
+    pub fn has_chainlink_config(&self) -> bool {
+        self.chainlink_ethereum_mainnet_rpc.is_some()
+            || self.chainlink_ethereum_sepolia_rpc.is_some()
+            || self.chainlink_polygon_mainnet_rpc.is_some()
+            || self.chainlink_polygon_mumbai_rpc.is_some()
     }
 }
