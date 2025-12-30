@@ -312,6 +312,7 @@ SettlementType::Cancellation // Market was cancelled
 | Phase 9 | 67 |
 | Phase 10 | 76 |
 | Phase 11 | 79 |
+| Phase 11b | 80 |
 
 All tests passing.
 
@@ -679,8 +680,36 @@ metrics::set_market_probability("market-id", "outcome-id", "yes", 0.65);
 - 缓存操作: 0.1ms, 0.5ms, 1ms, 5ms, 10ms, 50ms, 100ms
 - 数据库查询: 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 5s
 
+### Phase 11b: Metrics Integration (Completed)
+
+**Date:** 2024-12-30
+**Commit:** `47768d8`
+
+将 metrics 模块集成到应用程序各组件:
+
+#### HTTP 中间件集成
+- 创建 `src/api/middleware/metrics.rs`
+- 自动记录所有 HTTP 请求的延迟、状态码
+- 追踪进行中请求数量
+
+#### 撮合引擎集成
+- 记录订单提交指标 (side, order_type)
+- 记录订单撮合指标 (match_type: normal/mint/merge)
+- 记录交易执行和交易量
+- 记录 Mint/Merge 操作计数
+- 测量订单撮合耗时
+
+#### 缓存层集成
+- MarketCache 记录 cache hit/miss
+- 记录缓存操作延迟 (get/set)
+- 支持 market 和 orderbook 缓存类型
+
+#### WebSocket 集成
+- 追踪活跃 WebSocket 连接数
+- 记录消息收发计数
+
 ### Tests
-- 79 tests passing (新增 3 个 metrics 测试)
+- 80 tests passing (新增 1 个 metrics middleware 测试)
 
 ---
 
