@@ -308,17 +308,67 @@ SettlementType::Cancellation // Market was cancelled
 | Phase 2 | 64 |
 | Phase 6 | 64 |
 | Phase 7 | 65 |
+| Phase 8 | 65 |
 
 All tests passing.
 
 ---
 
+## Phase 8: Admin Middleware (Completed)
+
+**Date:** 2024-12-30
+
+### Overview
+添加管理员中间件，用于保护管理员端点，确保只有管理员角色的用户才能访问。
+
+### 数据库迁移
+- `0018_add_user_role.sql`
+  - 创建 `user_role` 枚举类型: `user`, `admin`, `superadmin`
+  - 添加 `role` 字段到 `users` 表
+  - 添加 `username` 和 `avatar_url` 字段
+
+### 用户角色
+```rust
+pub enum UserRole {
+    User,       // 普通用户
+    Admin,      // 管理员
+    SuperAdmin, // 超级管理员
+}
+```
+
+### 中间件链
+```
+请求 → auth_middleware (验证JWT) → admin_middleware (检查角色) → Handler
+```
+
+### 开发模式支持
+- `X-Test-Address`: 测试用户地址
+- `X-Test-Role`: 测试用户角色 (user/admin/superadmin)
+
+### 错误响应
+- `401 Unauthorized` - 未登录或 token 无效
+- `403 Forbidden` - 用户没有管理员权限
+
+### 受保护的管理员端点
+| Method | Endpoint | 描述 |
+|--------|----------|------|
+| POST | `/admin/markets` | 创建市场 |
+| POST | `/admin/markets/:market_id/close` | 暂停交易 |
+| POST | `/admin/markets/:market_id/resolve` | 结算市场 |
+| POST | `/admin/markets/:market_id/cancel` | 取消市场 |
+
+### 修改的文件
+- `src/auth/middleware.rs` - 添加 `UserRole`, `admin_middleware`, `fetch_user_role`
+- `src/api/routes/mod.rs` - 更新管理员路由使用中间件
+- `migrations/0018_add_user_role.sql` - 添加用户角色
+
+---
+
 ## Next Steps (TODO)
 
-1. **Admin Middleware** - Add proper admin role checking
-2. **Price Oracle Integration** - Update probabilities from external sources
-3. **Performance Optimization** - Add caching for frequently accessed data
-4. **Monitoring** - Add metrics and alerting
+1. **Price Oracle Integration** - Update probabilities from external sources
+2. **Performance Optimization** - Add caching for frequently accessed data
+3. **Monitoring** - Add metrics and alerting
 
 ---
 

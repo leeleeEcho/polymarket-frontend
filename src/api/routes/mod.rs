@@ -6,7 +6,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::api::handlers;
-use crate::auth::middleware::auth_middleware;
+use crate::auth::middleware::{admin_middleware, auth_middleware};
 use crate::AppState;
 
 pub fn create_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -49,13 +49,15 @@ pub fn create_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/withdraw/:id/confirm", post(handlers::withdraw::confirm_withdraw))
         .layer(axum_middleware::from_fn_with_state(state.clone(), auth_middleware));
 
-    // Admin routes (auth required + admin check)
-    // TODO: Add proper admin middleware that checks for admin role
+    // Admin routes (auth required + admin role check)
     let admin_routes = Router::new()
         .route("/admin/markets", post(handlers::market::create_market))
         .route("/admin/markets/:market_id/close", post(handlers::market::close_market))
         .route("/admin/markets/:market_id/resolve", post(handlers::market::resolve_market))
         .route("/admin/markets/:market_id/cancel", post(handlers::market::cancel_market))
+        // Admin middleware must come BEFORE auth middleware in the layer chain
+        // (layers are applied in reverse order, so auth runs first, then admin)
+        .layer(axum_middleware::from_fn(admin_middleware))
         .layer(axum_middleware::from_fn_with_state(state.clone(), auth_middleware));
 
     Router::new()
