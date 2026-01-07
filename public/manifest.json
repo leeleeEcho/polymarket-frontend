@@ -1,0 +1,38 @@
+{
+  "name": "nextX - Predict What's Next",
+  "short_name": "nextX",
+  "description": "Decentralized prediction market platform. Trade on the outcome of real-world events.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#0ea5e9",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "crypto"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Markets",
+      "url": "/",
+      "description": "Browse prediction markets"
+    },
+    {
+      "name": "Portfolio",
+      "url": "/portfolio",
+      "description": "View your portfolio"
+    }
+  ]
+}
