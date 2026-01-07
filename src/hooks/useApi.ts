@@ -517,3 +517,165 @@ export function useUserTrades() {
 
   return { trades, loading, error, fetchUserTrades };
 }
+
+// ============================================================================
+// CTF Conditional Token Minting Hooks
+// ============================================================================
+
+// Token position type
+export interface TokenPosition {
+  market_id: string;
+  market_question: string;
+  yes_balance: string;
+  no_balance: string;
+  yes_token_id: string;
+  no_token_id: string;
+}
+
+// Position operation result
+export interface PositionOperationResult {
+  success: boolean;
+  tx_hash: string;
+  market_id: string;
+  amount: string;
+  message: string;
+}
+
+// Hook for CTF token positions
+export function useCtfPositions() {
+  const { address } = useAccount();
+  const [positions, setPositions] = useState<TokenPosition[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchPositions = useCallback(async () => {
+    if (!address) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchApi<{ positions: TokenPosition[] }>(
+        "/api/v1/ctf/positions",
+        {},
+        address
+      );
+      setPositions(data.positions || []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to fetch positions");
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  const fetchMarketPosition = useCallback(async (marketId: string) => {
+    if (!address) return null;
+    try {
+      const data = await fetchApi<TokenPosition>(
+        `/api/v1/ctf/positions/${marketId}`,
+        {},
+        address
+      );
+      return data;
+    } catch (e) {
+      console.error("Failed to fetch market position:", e);
+      return null;
+    }
+  }, [address]);
+
+  return { positions, loading, error, fetchPositions, fetchMarketPosition };
+}
+
+// Hook for splitting position (minting Yes/No tokens from USDC)
+export function useSplitPosition() {
+  const { address } = useAccount();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const splitPosition = useCallback(async (marketId: string, amount: string): Promise<PositionOperationResult> => {
+    if (!address) throw new Error("Wallet not connected");
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchApi<PositionOperationResult>(
+        "/api/v1/ctf/split",
+        {
+          method: "POST",
+          body: JSON.stringify({ market_id: marketId, amount }),
+        },
+        address
+      );
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to split position";
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  return { splitPosition, loading, error };
+}
+
+// Hook for merging positions (burning Yes/No tokens back to USDC)
+export function useMergePositions() {
+  const { address } = useAccount();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mergePositions = useCallback(async (marketId: string, amount: string): Promise<PositionOperationResult> => {
+    if (!address) throw new Error("Wallet not connected");
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchApi<PositionOperationResult>(
+        "/api/v1/ctf/merge",
+        {
+          method: "POST",
+          body: JSON.stringify({ market_id: marketId, amount }),
+        },
+        address
+      );
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to merge positions";
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  return { mergePositions, loading, error };
+}
+
+// Hook for redeeming positions after market resolution
+export function useRedeemPositions() {
+  const { address } = useAccount();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const redeemPositions = useCallback(async (marketId: string): Promise<PositionOperationResult> => {
+    if (!address) throw new Error("Wallet not connected");
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchApi<PositionOperationResult>(
+        "/api/v1/ctf/redeem",
+        {
+          method: "POST",
+          body: JSON.stringify({ market_id: marketId }),
+        },
+        address
+      );
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to redeem positions";
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  return { redeemPositions, loading, error };
+}

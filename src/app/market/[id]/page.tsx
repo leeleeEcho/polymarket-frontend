@@ -8,6 +8,7 @@ import { Header } from "@/components/Header";
 import { TradingPanel } from "@/components/TradingPanel";
 import { Orderbook } from "@/components/Orderbook";
 import { SettlementPanel } from "@/components/SettlementPanel";
+import { MintingPanel } from "@/components/MintingPanel";
 import { useMarket, useTrades, useOrders } from "@/hooks/useApi";
 
 // Dynamic import for KlineChart to avoid SSR issues with lightweight-charts
@@ -26,7 +27,7 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import { useAccount } from "wagmi";
 import type { Outcome, Trade } from "@/types";
 
-type TabType = "trade" | "orderbook" | "history";
+type TabType = "trade" | "orderbook" | "mint" | "history";
 
 export default function MarketPage() {
   const params = useParams();
@@ -239,6 +240,18 @@ export default function MarketPage() {
             >
               Orderbook
             </button>
+            {isConnected && (
+              <button
+                onClick={() => setActiveTab("mint")}
+                className={`flex-1 py-3 text-sm font-medium transition ${
+                  activeTab === "mint"
+                    ? "text-primary-400 border-b-2 border-primary-400"
+                    : "text-gray-400"
+                }`}
+              >
+                Mint
+              </button>
+            )}
             <button
               onClick={() => setActiveTab("history")}
               className={`flex-1 py-3 text-sm font-medium transition ${
@@ -293,6 +306,10 @@ export default function MarketPage() {
               outcomeId={selectedOutcome.id}
               shareType={selectedOutcome.name.toLowerCase()}
             />
+          )}
+
+          {activeTab === "mint" && isConnected && (market.status === "open" || market.status === "active") && (
+            <MintingPanel market={market} />
           )}
 
           {activeTab === "history" && (
@@ -404,6 +421,11 @@ export default function MarketPage() {
                   Trading is temporarily paused for this market. Please check back later.
                 </p>
               </div>
+            )}
+
+            {/* Minting Panel for on-chain token operations */}
+            {isConnected && (market.status === "open" || market.status === "active") && (
+              <MintingPanel market={market} />
             )}
           </div>
 
