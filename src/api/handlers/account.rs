@@ -750,6 +750,140 @@ pub async fn settle_market(
     }))
 }
 
+// ============================================================================
+// Portfolio Summary
+// ============================================================================
+
+/// Portfolio summary response
+#[derive(Debug, Serialize)]
+pub struct PortfolioSummaryResponse {
+    /// Total value of all positions at current prices
+    pub total_position_value: Decimal,
+    /// Total cost basis of all positions
+    pub total_cost_basis: Decimal,
+    /// Total unrealized P&L
+    pub total_unrealized_pnl: Decimal,
+    /// Unrealized P&L percentage
+    pub unrealized_pnl_percent: Decimal,
+    /// Available cash balance
+    pub available_balance: Decimal,
+    /// Frozen balance (in open orders)
+    pub frozen_balance: Decimal,
+    /// Total portfolio value (positions + cash)
+    pub total_portfolio_value: Decimal,
+    /// Number of active positions
+    pub active_positions: i64,
+    /// Number of open orders
+    pub open_orders: i64,
+    /// Recent realized P&L (from settled markets)
+    pub realized_pnl: Decimal,
+}
+
+/// Get portfolio summary
+/// GET /account/portfolio
+pub async fn get_portfolio(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+) -> Result<Json<PortfolioSummaryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let user_address = auth_user.address.to_lowercase();
+
+    // Get positions summary
+    let positions_summary: Option<(Decimal, Decimal, i64)> = sqlx::query_as(
+        r#"
+        SELECT
+            COALESCE(SUM(s.amount * CASE WHEN s.share_type = 'yes' THEN o.probability ELSE (1 - o.probability) END), 0) as total_value,
+            COALESCE(SUM(s.amount * s.avg_cost), 0) as total_cost,
+            COUNT(*) as position_count
+        FROM shares s
+        JOIN outcomes o ON s.outcome_id = o.id
+        WHERE s.user_address = $1 AND s.amount > 0
+        "#,
+    )
+    .bind(&user_address)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch positions summary: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "获取持仓汇总失败".to_string(),
+                code: "PORTFOLIO_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let (total_position_value, total_cost_basis, active_positions) = positions_summary
+        .unwrap_or((Decimal::ZERO, Decimal::ZERO, 0));
+
+    // Get balance
+    let balance: Option<(Decimal, Decimal)> = sqlx::query_as(
+        "SELECT COALESCE(available, 0), COALESCE(frozen, 0) FROM balances WHERE user_address = $1 AND token = 'USDC'"
+    )
+    .bind(&user_address)
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch balance: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "获取余额失败".to_string(),
+                code: "BALANCE_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let (available_balance, frozen_balance) = balance.unwrap_or((Decimal::ZERO, Decimal::ZERO));
+
+    // Get open orders count
+    let open_orders: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM orders WHERE user_address = $1 AND status IN ('open', 'pending', 'partially_filled')"
+    )
+    .bind(&user_address)
+    .fetch_one(&state.db.pool)
+    .await
+    .unwrap_or(0);
+
+    // Get realized P&L from share_changes (settlements)
+    let realized_pnl: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(
+            CASE WHEN change_type = 'settlement' THEN
+                amount * (1 - avg_cost_before)
+            ELSE 0 END
+        ), 0)
+        FROM share_changes
+        WHERE user_address = $1
+        "#
+    )
+    .bind(&user_address)
+    .fetch_one(&state.db.pool)
+    .await
+    .unwrap_or(Decimal::ZERO);
+
+    let total_unrealized_pnl = total_position_value - total_cost_basis;
+    let unrealized_pnl_percent = if total_cost_basis > Decimal::ZERO {
+        (total_unrealized_pnl / total_cost_basis) * Decimal::from(100)
+    } else {
+        Decimal::ZERO
+    };
+    let total_portfolio_value = total_position_value + available_balance + frozen_balance;
+
+    Ok(Json(PortfolioSummaryResponse {
+        total_position_value,
+        total_cost_basis,
+        total_unrealized_pnl,
+        unrealized_pnl_percent,
+        available_balance,
+        frozen_balance,
+        total_portfolio_value,
+        active_positions,
+        open_orders,
+        realized_pnl,
+    }))
+}
+
 /// Get settlement status for a market
 /// GET /account/settle/:market_id/status
 pub async fn get_settlement_status(
@@ -762,31 +896,34 @@ pub async fn get_settlement_status(
     let status = SettlementService::get_settlement_status(&state.db.pool, market_id, &user_address)
         .await
         .map_err(|e| {
+            let (status_code, code, message) = match &e {
+                SettlementError::MarketNotFound(_) => (
+                    StatusCode::NOT_FOUND,
+                    "MARKET_NOT_FOUND",
+                    "市场不存在",
+                ),
+                _ => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "SETTLEMENT_STATUS_FAILED",
+                    "获取结算状态失败",
+                ),
+            };
             tracing::error!("Failed to get settlement status: {}", e);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                status_code,
                 Json(ErrorResponse {
-                    error: "获取结算状态失败".to_string(),
-                    code: "SETTLEMENT_STATUS_FAILED".to_string(),
+                    error: message.to_string(),
+                    code: code.to_string(),
                 }),
             )
         })?;
 
-    match status {
-        Some(s) => Ok(Json(SettlementStatusResponse {
-            market_id: s.market_id,
-            market_status: s.market_status,
-            is_settled: s.is_settled,
-            can_settle: s.can_settle,
-            potential_payout: s.potential_payout,
-            share_count: s.share_count,
-        })),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "没有找到相关持仓".to_string(),
-                code: "NO_SHARES_FOUND".to_string(),
-            }),
-        )),
-    }
+    Ok(Json(SettlementStatusResponse {
+        market_id: status.market_id,
+        market_status: status.market_status,
+        is_settled: status.is_settled,
+        can_settle: status.can_settle,
+        potential_payout: status.potential_payout,
+        share_count: status.share_count.to_string().parse().unwrap_or(0),
+    }))
 }

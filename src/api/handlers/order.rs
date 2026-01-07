@@ -23,7 +23,7 @@ use crate::models::{
     CreateOrderRequest, Order, OrderResponse, OrderSide, OrderStatus, OrderType,
 };
 use crate::services::matching::{
-    OrderType as MatchingOrderType, Side as MatchingSide,
+    OrderFlowOrchestrator, OrderType as MatchingOrderType, Side as MatchingSide, TradeEvent,
 };
 use crate::AppState;
 
@@ -307,19 +307,20 @@ pub async fn create_order(
     sqlx::query(
         r#"
         INSERT INTO orders (
-            id, user_address, market_id, outcome_id, share_type,
+            id, user_address, symbol, market_id, outcome_id, share_type,
             side, order_type, price, amount, filled_amount, status, signature,
             created_at, updated_at
         )
         VALUES (
-            $1, $2, $3, $4, $5::share_type,
-            $6::order_side, $7::order_type, $8, $9, $10, $11::order_status, $12,
-            $13, $13
+            $1, $2, $3, $4, $5, $6::share_type,
+            $7::order_side, $8::order_type, $9, $10, $11, $12::order_status, $13,
+            $14, $14
         )
         "#,
     )
     .bind(order_id)
     .bind(&auth_user.address.to_lowercase())
+    .bind(&market_key)
     .bind(req.market_id)
     .bind(req.outcome_id)
     .bind(req.share_type.to_string())
@@ -343,6 +344,44 @@ pub async fn create_order(
             }),
         )
     })?;
+
+    // Persist trades to database
+    for trade_exec in &match_result.trades {
+        let trade_event = TradeEvent::from_execution(
+            trade_exec,
+            market_key.clone(),
+            auth_user.address.to_lowercase(),
+            matching_side,
+        );
+
+        if let Err(e) = OrderFlowOrchestrator::persist_trade(&state.db.pool, &trade_event).await {
+            tracing::error!("Failed to persist trade {}: {}", trade_exec.trade_id, e);
+            // Continue processing other trades, don't fail the order
+        } else {
+            tracing::debug!("Persisted trade: {}", trade_exec.trade_id);
+        }
+
+        // Update maker order's filled_amount in database
+        if let Err(e) = sqlx::query(
+            r#"
+            UPDATE orders
+            SET filled_amount = filled_amount + $1,
+                status = CASE
+                    WHEN filled_amount + $1 >= amount THEN 'filled'::order_status
+                    ELSE 'partially_filled'::order_status
+                END,
+                updated_at = NOW()
+            WHERE id = $2
+            "#,
+        )
+        .bind(trade_exec.amount)
+        .bind(trade_exec.maker_order_id)
+        .execute(&state.db.pool)
+        .await
+        {
+            tracing::error!("Failed to update maker order {}: {}", trade_exec.maker_order_id, e);
+        }
+    }
 
     Ok(Json(CreateOrderResponse {
         order_id,

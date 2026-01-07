@@ -298,6 +298,10 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let mut order_update_receiver = state.order_update_sender.subscribe();
     tracing::info!("📡 WebSocket subscribed to order update events");
 
+    // Subscribe to balance updates for real-time push
+    let mut balance_update_receiver = state.balance_update_sender.subscribe();
+    tracing::info!("📡 WebSocket subscribed to balance update events");
+
     // Ticker update interval (every 2 seconds)
     let mut ticker_interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
 
@@ -498,6 +502,42 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         // Continue without order updates
+                    }
+                }
+            }
+
+            // Handle balance updates (real-time push for deposits/withdrawals)
+            balance_update = balance_update_receiver.recv() => {
+                match balance_update {
+                    Ok(event) => {
+                        // Only send to the user who owns this balance
+                        if authenticated && user_address.is_some() {
+                            let addr = user_address.as_ref().unwrap().to_lowercase();
+                            if addr == event.user_address && subscriptions.contains("balance") {
+                                tracing::info!(
+                                    "📤 Sending real-time balance update to {}: token={}, event={}",
+                                    addr, event.token, event.event_type
+                                );
+                                let msg = serde_json::json!({
+                                    "channel": "balance",
+                                    "type": "balance_update",
+                                    "data": {
+                                        "token": event.token,
+                                        "available": event.available,
+                                        "frozen": event.frozen,
+                                        "total": event.total,
+                                        "event_type": event.event_type
+                                    }
+                                });
+                                let _ = sender.send(Message::Text(serde_json::to_string(&msg).unwrap())).await;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Balance update receiver lagged by {} messages", n);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        // Continue without balance updates
                     }
                 }
             }

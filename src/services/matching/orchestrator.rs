@@ -232,19 +232,20 @@ impl OrderFlowOrchestrator {
         sqlx::query(
             r#"
             INSERT INTO trades (
-                id, market_id, outcome_id, share_type, match_type,
+                id, symbol, market_id, outcome_id, share_type, match_type,
                 maker_order_id, taker_order_id, maker_address, taker_address,
                 side, price, amount, maker_fee, taker_fee, created_at
             )
             VALUES (
-                $1, $2, $3, $4::share_type, $5::match_type,
-                $6, $7, $8, $9,
-                $10::order_side, $11, $12, $13, $14, to_timestamp($15::double precision / 1000)
+                $1, $2, $3, $4, $5::share_type, $6::match_type,
+                $7, $8, $9, $10,
+                $11::order_side, $12, $13, $14, $15, to_timestamp($16::double precision / 1000)
             )
             ON CONFLICT (id) DO NOTHING
             "#
         )
         .bind(trade.trade_id)
+        .bind(&trade.symbol)
         .bind(trade.market_id)
         .bind(trade.outcome_id)
         .bind(trade.share_type.to_string())

@@ -59,9 +59,23 @@ pub struct MarketsResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct MarketsQuery {
+    /// Search query (searches question and description)
+    pub q: Option<String>,
+    /// Filter by category
     pub category: Option<String>,
+    /// Filter by status (active, paused, resolved, cancelled)
     pub status: Option<String>,
+    /// Sort by field (volume, created, end_time)
+    pub sort: Option<String>,
+    /// Sort order (asc, desc)
+    pub order: Option<String>,
+    /// Filter by end_time before (timestamp)
+    pub ends_before: Option<i64>,
+    /// Filter by end_time after (timestamp)
+    pub ends_after: Option<i64>,
+    /// Page limit
     pub limit: Option<i64>,
+    /// Page offset
     pub offset: Option<i64>,
 }
 
@@ -136,8 +150,19 @@ pub struct TradesQuery {
 // Handlers
 // ============================================================================
 
-/// List all available prediction markets
+/// List all available prediction markets with search and filters
 /// GET /markets
+///
+/// Query parameters:
+/// - q: Search query (searches question and description)
+/// - category: Filter by category
+/// - status: Filter by status (active, paused, resolved, cancelled)
+/// - sort: Sort by field (volume, created, end_time) - default: volume
+/// - order: Sort order (asc, desc) - default: desc
+/// - ends_before: Filter markets ending before timestamp
+/// - ends_after: Filter markets ending after timestamp
+/// - limit: Page size (max 100)
+/// - offset: Page offset
 pub async fn list_markets(
     State(state): State<Arc<AppState>>,
     Query(query): Query<MarketsQuery>,
@@ -145,7 +170,45 @@ pub async fn list_markets(
     let limit = query.limit.unwrap_or(50).min(100);
     let offset = query.offset.unwrap_or(0);
 
-    // Query markets from database
+    // Prepare search pattern for ILIKE
+    let search_pattern = query.q.as_ref().map(|q| format!("%{}%", q));
+
+    // Prepare end_time filters
+    let ends_before = query
+        .ends_before
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+    let ends_after = query
+        .ends_after
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+
+    // Build ORDER BY clause based on sort parameter
+    let order_clause = match (query.sort.as_deref(), query.order.as_deref()) {
+        (Some("created"), Some("asc")) => "m.created_at ASC",
+        (Some("created"), _) => "m.created_at DESC",
+        (Some("end_time"), Some("asc")) => "m.end_time ASC NULLS LAST",
+        (Some("end_time"), _) => "m.end_time DESC NULLS LAST",
+        (Some("volume"), Some("asc")) => "m.volume_24h ASC",
+        (_, Some("asc")) => "m.volume_24h ASC",
+        _ => "m.volume_24h DESC", // default
+    };
+
+    // Query markets from database with search and filters
+    let query_str = format!(
+        r#"
+        SELECT m.id, m.question, m.description, m.category, m.status::text,
+               m.resolution_source, m.end_time, m.volume_24h, m.total_volume, m.created_at
+        FROM markets m
+        WHERE ($1::text IS NULL OR (m.question ILIKE $1 OR m.description ILIKE $1))
+        AND ($2::text IS NULL OR m.category = $2)
+        AND ($3::text IS NULL OR m.status::text = $3)
+        AND ($4::timestamptz IS NULL OR m.end_time < $4)
+        AND ($5::timestamptz IS NULL OR m.end_time > $5)
+        ORDER BY {}
+        LIMIT $6 OFFSET $7
+        "#,
+        order_clause
+    );
+
     let markets_data: Vec<(
         Uuid,
         String,
@@ -157,44 +220,46 @@ pub async fn list_markets(
         Decimal,
         Decimal,
         DateTime<Utc>,
-    )> = sqlx::query_as(
-        r#"
-        SELECT m.id, m.question, m.description, m.category, m.status::text,
-               m.resolution_source, m.end_time, m.volume_24h, m.total_volume, m.created_at
-        FROM markets m
-        WHERE ($1::text IS NULL OR m.category = $1)
-        AND ($2::text IS NULL OR m.status::text = $2)
-        ORDER BY m.volume_24h DESC
-        LIMIT $3 OFFSET $4
-        "#,
-    )
-    .bind(query.category.as_ref())
-    .bind(query.status.as_ref())
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.db.pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to fetch markets: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Failed to fetch markets".to_string(),
-                code: "MARKET_FETCH_FAILED".to_string(),
-            }),
-        )
-    })?;
+    )> = sqlx::query_as(&query_str)
+        .bind(search_pattern.as_ref())
+        .bind(query.category.as_ref())
+        .bind(query.status.as_ref())
+        .bind(ends_before)
+        .bind(ends_after)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch markets: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to fetch markets".to_string(),
+                    code: "MARKET_FETCH_FAILED".to_string(),
+                }),
+            )
+        })?;
 
-    // Get total count
+    // Prepare search pattern for count query
+    let search_pattern_count = query.q.as_ref().map(|q| format!("%{}%", q));
+
+    // Get total count with same filters
     let total: (i64,) = sqlx::query_as(
         r#"
-        SELECT COUNT(*) FROM markets
-        WHERE ($1::text IS NULL OR category = $1)
-        AND ($2::text IS NULL OR status::text = $2)
+        SELECT COUNT(*) FROM markets m
+        WHERE ($1::text IS NULL OR (m.question ILIKE $1 OR m.description ILIKE $1))
+        AND ($2::text IS NULL OR m.category = $2)
+        AND ($3::text IS NULL OR m.status::text = $3)
+        AND ($4::timestamptz IS NULL OR m.end_time < $4)
+        AND ($5::timestamptz IS NULL OR m.end_time > $5)
         "#,
     )
+    .bind(search_pattern_count.as_ref())
     .bind(query.category.as_ref())
     .bind(query.status.as_ref())
+    .bind(ends_before)
+    .bind(ends_after)
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| {
@@ -775,17 +840,16 @@ pub async fn create_market(
         )
     })?;
 
-    // Create Yes outcome
+    // Create Yes outcome (without complement_id first)
     sqlx::query(
         r#"
-        INSERT INTO outcomes (id, market_id, token_id, name, share_type, complement_id, probability)
-        VALUES ($1, $2, $3, 'Yes', 'yes', $4, 0.5)
+        INSERT INTO outcomes (id, market_id, token_id, name, share_type, probability)
+        VALUES ($1, $2, $3, 'Yes', 'yes', 0.5)
         "#,
     )
     .bind(yes_outcome_id)
     .bind(market_id)
     .bind(&req.yes_token_id)
-    .bind(no_outcome_id)
     .execute(&mut *tx)
     .await
     .map_err(|e| {
@@ -799,17 +863,16 @@ pub async fn create_market(
         )
     })?;
 
-    // Create No outcome
+    // Create No outcome (without complement_id first)
     sqlx::query(
         r#"
-        INSERT INTO outcomes (id, market_id, token_id, name, share_type, complement_id, probability)
-        VALUES ($1, $2, $3, 'No', 'no', $4, 0.5)
+        INSERT INTO outcomes (id, market_id, token_id, name, share_type, probability)
+        VALUES ($1, $2, $3, 'No', 'no', 0.5)
         "#,
     )
     .bind(no_outcome_id)
     .bind(market_id)
     .bind(&req.no_token_id)
-    .bind(yes_outcome_id)
     .execute(&mut *tx)
     .await
     .map_err(|e| {
@@ -822,6 +885,39 @@ pub async fn create_market(
             }),
         )
     })?;
+
+    // Now update complement_id references
+    sqlx::query("UPDATE outcomes SET complement_id = $1 WHERE id = $2")
+        .bind(no_outcome_id)
+        .bind(yes_outcome_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to update Yes complement: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to link outcomes".to_string(),
+                    code: "OUTCOME_LINK_FAILED".to_string(),
+                }),
+            )
+        })?;
+
+    sqlx::query("UPDATE outcomes SET complement_id = $1 WHERE id = $2")
+        .bind(yes_outcome_id)
+        .bind(no_outcome_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to update No complement: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to link outcomes".to_string(),
+                    code: "OUTCOME_LINK_FAILED".to_string(),
+                }),
+            )
+        })?;
 
     // Commit transaction
     tx.commit().await.map_err(|e| {
@@ -1341,3 +1437,317 @@ pub async fn cancel_market(
         message: "Market has been cancelled. All positions will be refunded.".to_string(),
     }))
 }
+
+
+// ============================================================================
+// Market Discovery Endpoints
+// ============================================================================
+
+/// Response for categories list
+#[derive(Debug, Serialize)]
+pub struct CategoriesResponse {
+    pub categories: Vec<CategoryInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CategoryInfo {
+    pub name: String,
+    pub market_count: i64,
+    pub volume_24h: Decimal,
+}
+
+/// Get all available market categories
+/// GET /markets/categories
+pub async fn get_categories(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CategoriesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let categories: Vec<(String, i64, Decimal)> = sqlx::query_as(
+        r#"
+        SELECT category, COUNT(*) as market_count, COALESCE(SUM(volume_24h), 0) as volume_24h
+        FROM markets
+        WHERE status::text = 'active'
+        GROUP BY category
+        ORDER BY volume_24h DESC
+        "#,
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch categories: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to fetch categories".to_string(),
+                code: "CATEGORY_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let categories = categories
+        .into_iter()
+        .map(|(name, market_count, volume_24h)| CategoryInfo {
+            name,
+            market_count,
+            volume_24h,
+        })
+        .collect();
+
+    Ok(Json(CategoriesResponse { categories }))
+}
+
+/// Response for trending markets
+#[derive(Debug, Serialize)]
+pub struct TrendingMarketsResponse {
+    pub markets: Vec<MarketInfo>,
+}
+
+/// Get trending/hot markets (highest volume in last 24h)
+/// GET /markets/trending
+pub async fn get_trending_markets(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TrendingQuery>,
+) -> Result<Json<TrendingMarketsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(10).min(50);
+
+    let markets_data: Vec<(
+        Uuid,
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        Option<DateTime<Utc>>,
+        Decimal,
+        Decimal,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        r#"
+        SELECT m.id, m.question, m.description, m.category, m.status::text,
+               m.resolution_source, m.end_time, m.volume_24h, m.total_volume, m.created_at
+        FROM markets m
+        WHERE m.status::text = 'active'
+        ORDER BY m.volume_24h DESC
+        LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch trending markets: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to fetch trending markets".to_string(),
+                code: "TRENDING_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let mut markets = Vec::new();
+    for (id, question, description, category, status, resolution_source, end_time, volume_24h, total_volume, created_at) in markets_data {
+        let outcomes_data: Vec<(Uuid, String, Decimal)> = sqlx::query_as(
+            "SELECT id, name, probability FROM outcomes WHERE market_id = $1 ORDER BY name",
+        )
+        .bind(id)
+        .fetch_all(&state.db.pool)
+        .await
+        .unwrap_or_default();
+
+        let outcomes: Vec<OutcomeInfo> = outcomes_data
+            .into_iter()
+            .map(|(oid, name, probability)| OutcomeInfo { id: oid, name, probability })
+            .collect();
+
+        markets.push(MarketInfo {
+            id,
+            question,
+            description,
+            category,
+            outcomes,
+            status,
+            resolution_source,
+            end_time: end_time.map(|t| t.timestamp_millis()),
+            volume_24h,
+            total_volume,
+            liquidity: Decimal::ZERO,
+            created_at: created_at.timestamp_millis(),
+        });
+    }
+
+    Ok(Json(TrendingMarketsResponse { markets }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrendingQuery {
+    pub limit: Option<i64>,
+}
+
+/// Get markets ending soon
+/// GET /markets/ending-soon
+pub async fn get_ending_soon(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<EndingSoonQuery>,
+) -> Result<Json<TrendingMarketsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(10).min(50);
+    let hours = query.hours.unwrap_or(24);
+    
+    let cutoff = chrono::Utc::now() + chrono::Duration::hours(hours);
+
+    let markets_data: Vec<(
+        Uuid,
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        Option<DateTime<Utc>>,
+        Decimal,
+        Decimal,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        r#"
+        SELECT m.id, m.question, m.description, m.category, m.status::text,
+               m.resolution_source, m.end_time, m.volume_24h, m.total_volume, m.created_at
+        FROM markets m
+        WHERE m.status::text = 'active'
+        AND m.end_time IS NOT NULL
+        AND m.end_time <= $1
+        AND m.end_time > NOW()
+        ORDER BY m.end_time ASC
+        LIMIT $2
+        "#,
+    )
+    .bind(cutoff)
+    .bind(limit)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch ending soon markets: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to fetch ending soon markets".to_string(),
+                code: "ENDING_SOON_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let mut markets = Vec::new();
+    for (id, question, description, category, status, resolution_source, end_time, volume_24h, total_volume, created_at) in markets_data {
+        let outcomes_data: Vec<(Uuid, String, Decimal)> = sqlx::query_as(
+            "SELECT id, name, probability FROM outcomes WHERE market_id = $1 ORDER BY name",
+        )
+        .bind(id)
+        .fetch_all(&state.db.pool)
+        .await
+        .unwrap_or_default();
+
+        let outcomes: Vec<OutcomeInfo> = outcomes_data
+            .into_iter()
+            .map(|(oid, name, probability)| OutcomeInfo { id: oid, name, probability })
+            .collect();
+
+        markets.push(MarketInfo {
+            id,
+            question,
+            description,
+            category,
+            outcomes,
+            status,
+            resolution_source,
+            end_time: end_time.map(|t| t.timestamp_millis()),
+            volume_24h,
+            total_volume,
+            liquidity: Decimal::ZERO,
+            created_at: created_at.timestamp_millis(),
+        });
+    }
+
+    Ok(Json(TrendingMarketsResponse { markets }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EndingSoonQuery {
+    pub limit: Option<i64>,
+    /// Hours from now to consider "ending soon" (default: 24)
+    pub hours: Option<i64>,
+}
+
+/// Get newly created markets
+/// GET /markets/new
+pub async fn get_new_markets(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TrendingQuery>,
+) -> Result<Json<TrendingMarketsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(10).min(50);
+
+    let markets_data: Vec<(
+        Uuid,
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        Option<DateTime<Utc>>,
+        Decimal,
+        Decimal,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        r#"
+        SELECT m.id, m.question, m.description, m.category, m.status::text,
+               m.resolution_source, m.end_time, m.volume_24h, m.total_volume, m.created_at
+        FROM markets m
+        WHERE m.status::text = 'active'
+        ORDER BY m.created_at DESC
+        LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch new markets: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to fetch new markets".to_string(),
+                code: "NEW_MARKETS_FETCH_FAILED".to_string(),
+            }),
+        )
+    })?;
+
+    let mut markets = Vec::new();
+    for (id, question, description, category, status, resolution_source, end_time, volume_24h, total_volume, created_at) in markets_data {
+        let outcomes_data: Vec<(Uuid, String, Decimal)> = sqlx::query_as(
+            "SELECT id, name, probability FROM outcomes WHERE market_id = $1 ORDER BY name",
+        )
+        .bind(id)
+        .fetch_all(&state.db.pool)
+        .await
+        .unwrap_or_default();
+
+        let outcomes: Vec<OutcomeInfo> = outcomes_data
+            .into_iter()
+            .map(|(oid, name, probability)| OutcomeInfo { id: oid, name, probability })
+            .collect();
+
+        markets.push(MarketInfo {
+            id,
+            question,
+            description,
+            category,
+            outcomes,
+            status,
+            resolution_source,
+            end_time: end_time.map(|t| t.timestamp_millis()),
+            volume_24h,
+            total_volume,
+            liquidity: Decimal::ZERO,
+            created_at: created_at.timestamp_millis(),
+        });
+    }
+
+    Ok(Json(TrendingMarketsResponse { markets }))
+}
+

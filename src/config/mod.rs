@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
+use crate::blockchain::types::ContractAddresses;
 use crate::services::chainlink::{ChainlinkClient, Network};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -31,6 +32,20 @@ pub struct AppConfig {
     pub vault_address: String,
     pub referral_storage_address: String,
     pub referral_rebate_address: String,
+
+    // CTF Contract addresses (Prediction Market)
+    #[serde(default = "default_ctf_usdc_address")]
+    pub ctf_usdc_address: String,
+
+    #[serde(default = "default_ctf_conditional_tokens_address")]
+    pub ctf_conditional_tokens_address: String,
+
+    #[serde(default = "default_ctf_exchange_address")]
+    pub ctf_exchange_address: String,
+
+    // Backend signer for CTF operations (optional, for automated settlements)
+    #[serde(default)]
+    pub ctf_signer_private_key: Option<String>,
 
     // Collateral token settings (default: USDT)
     #[serde(default = "default_collateral_token_symbol")]
@@ -102,6 +117,10 @@ pub struct AppConfig {
     #[serde(default = "default_block_sync_lookback")]
     pub block_sync_lookback: u64,
 
+    // Deposit confirmation settings
+    #[serde(default = "default_min_confirmations")]
+    pub min_confirmations: u64,
+
     // Chainlink Oracle RPC URLs (optional)
     #[serde(default)]
     pub chainlink_ethereum_mainnet_rpc: Option<String>,
@@ -118,10 +137,44 @@ pub struct AppConfig {
     // Maximum age of Chainlink price data (in seconds) before considered stale
     #[serde(default = "default_chainlink_max_price_age")]
     pub chainlink_max_price_age: u64,
+
+    // UMA Optimistic Oracle V3 settings
+    #[serde(default)]
+    pub uma_oracle_address: Option<String>,
+
+    #[serde(default)]
+    pub uma_finder_address: Option<String>,
+
+    #[serde(default = "default_uma_liveness_seconds")]
+    pub uma_liveness_seconds: u64,
+
+    #[serde(default = "default_uma_bond_amount")]
+    pub uma_bond_amount: String,
 }
 
 fn default_chainlink_max_price_age() -> u64 {
     3600 // 1 hour
+}
+
+fn default_uma_liveness_seconds() -> u64 {
+    7200 // 2 hours default challenge period
+}
+
+fn default_uma_bond_amount() -> String {
+    "100000000".to_string() // 100 USDC (6 decimals)
+}
+
+// Sepolia testnet CTF contract addresses
+fn default_ctf_usdc_address() -> String {
+    "0x43954707B63e4bbb777c81771A5853031cFB901d".to_string()
+}
+
+fn default_ctf_conditional_tokens_address() -> String {
+    "0xd7a05df3CD0f963DA444c7FB251Ea7ebb541E2F2".to_string()
+}
+
+fn default_ctf_exchange_address() -> String {
+    "0x15b0d7db6137F6cAaB4c4E8CA8318Cb46e46C19B".to_string()
 }
 
 fn default_weth_address() -> String {
@@ -213,6 +266,10 @@ fn default_position_fee_rate() -> String {
 
 fn default_block_sync_lookback() -> u64 {
     100000 // ~7 hours on Arbitrum (0.25s blocks)
+}
+
+fn default_min_confirmations() -> u64 {
+    5 // Minimum block confirmations for deposits
 }
 
 impl AppConfig {
@@ -329,5 +386,59 @@ impl AppConfig {
             || self.chainlink_ethereum_sepolia_rpc.is_some()
             || self.chainlink_polygon_mainnet_rpc.is_some()
             || self.chainlink_polygon_mumbai_rpc.is_some()
+    }
+
+    /// Get CTF contract addresses
+    pub fn get_ctf_contract_addresses(&self) -> ContractAddresses {
+        ContractAddresses {
+            usdc: self.ctf_usdc_address.parse().unwrap_or_default(),
+            conditional_tokens: self.ctf_conditional_tokens_address.parse().unwrap_or_default(),
+            ctf_exchange: self.ctf_exchange_address.parse().unwrap_or_default(),
+            uma_oracle: self.uma_oracle_address.as_ref().and_then(|a| a.parse().ok()),
+        }
+    }
+
+    /// Create a BlockchainClient for CTF operations
+    pub fn create_blockchain_client(&self) -> Result<crate::blockchain::BlockchainClient, Box<dyn std::error::Error + Send + Sync>> {
+        let addresses = self.get_ctf_contract_addresses();
+
+        if let Some(ref private_key) = self.ctf_signer_private_key {
+            if !private_key.is_empty() {
+                return crate::blockchain::BlockchainClient::new_with_signer(
+                    &self.rpc_url,
+                    private_key,
+                    addresses,
+                    self.chain_id,
+                );
+            }
+        }
+
+        crate::blockchain::BlockchainClient::new(&self.rpc_url, addresses, self.chain_id)
+    }
+
+    /// Check if CTF contracts are configured
+    pub fn has_ctf_config(&self) -> bool {
+        !self.ctf_usdc_address.is_empty()
+            && !self.ctf_conditional_tokens_address.is_empty()
+            && !self.ctf_exchange_address.is_empty()
+    }
+
+    /// Check if UMA Oracle is configured
+    pub fn has_uma_config(&self) -> bool {
+        self.uma_oracle_address.is_some()
+    }
+
+    /// Get UMA Oracle address (defaults to Sepolia if not set)
+    pub fn get_uma_oracle_address(&self) -> String {
+        self.uma_oracle_address
+            .clone()
+            .unwrap_or_else(|| "0xFd9e2642a170aDD10F53Ee14a93FcF2F31924944".to_string())
+    }
+
+    /// Get UMA Finder address (defaults to Sepolia if not set)
+    pub fn get_uma_finder_address(&self) -> String {
+        self.uma_finder_address
+            .clone()
+            .unwrap_or_else(|| "0xf4C48eDAd256326086AEfbd1A53e1896815F8f13".to_string())
     }
 }
