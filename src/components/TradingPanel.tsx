@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAccount } from "wagmi";
 import { useOrderSigning } from "@/hooks/useOrderSigning";
-import { usePlaceOrder, useBalance } from "@/hooks/useApi";
+import { useCtfOrderSigning, OrderSide } from "@/hooks/useCtfOrderSigning";
+import { usePlaceOrder, usePlaceCtfOrder, useBalance } from "@/hooks/useApi";
 import type { Market, Outcome } from "@/types";
 
 interface TradingPanelProps {
@@ -18,9 +19,21 @@ export function TradingPanel({
   onOutcomeChange,
 }: TradingPanelProps) {
   const { isConnected } = useAccount();
+
+  // Legacy order signing (for markets without condition_id)
   const { signOrder } = useOrderSigning();
   const { placeOrder, loading: orderLoading, error: orderError } = usePlaceOrder();
+
+  // CTF order signing (for markets with condition_id - on-chain settlement)
+  const { signCtfOrder } = useCtfOrderSigning();
+  const { placeCtfOrder, loading: ctfOrderLoading, error: ctfOrderError } = usePlaceCtfOrder();
+
   const { balances, fetchBalance } = useBalance();
+
+  // Check if market supports on-chain CTF settlement
+  const isCtfEnabled = useMemo(() => {
+    return !!(market.condition_id && market.yes_token_id && market.no_token_id);
+  }, [market.condition_id, market.yes_token_id, market.no_token_id]);
 
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [shareType, setShareType] = useState<"yes" | "no">("yes");
@@ -50,21 +63,56 @@ export function TradingPanel({
     setSuccessMessage("");
 
     try {
-      // Sign the order with EIP-712
-      const signedOrder = await signOrder({
-        market_id: market.id,
-        outcome_id: selectedOutcome.id,
-        side,
-        order_type: orderType,
-        price,
-        amount,
-        share_type: shareType,
-      });
+      if (isCtfEnabled) {
+        // CTF order with on-chain settlement
+        const isYes = shareType === "yes";
+        const tokenId = BigInt(isYes ? market.yes_token_id! : market.no_token_id!);
 
-      // Place the order
-      await placeOrder(signedOrder);
+        // Sign the CTF order with EIP-712
+        const signedCtfOrder = await signCtfOrder({
+          tokenId,
+          side: side === "buy" ? OrderSide.Buy : OrderSide.Sell,
+          price,
+          amount,
+          expirationMinutes: 60, // 1 hour expiration
+          feeRateBps: 200, // 2% fee
+        });
 
-      setSuccessMessage("Order placed successfully!");
+        // Place the CTF order
+        await placeCtfOrder({
+          market_id: market.id,
+          outcome_id: selectedOutcome.id,
+          share_type: shareType,
+          side,
+          price,
+          amount,
+          token_id: signedCtfOrder.tokenId,
+          maker_amount: signedCtfOrder.makerAmount,
+          taker_amount: signedCtfOrder.takerAmount,
+          expiration: parseInt(signedCtfOrder.expiration),
+          nonce: parseInt(signedCtfOrder.nonce),
+          fee_rate_bps: parseInt(signedCtfOrder.feeRateBps),
+          sig_type: signedCtfOrder.sigType,
+          signature: signedCtfOrder.signature,
+        });
+
+        setSuccessMessage("Order placed with on-chain settlement!");
+      } else {
+        // Legacy order (off-chain only)
+        const signedOrder = await signOrder({
+          market_id: market.id,
+          outcome_id: selectedOutcome.id,
+          side,
+          order_type: orderType,
+          price,
+          amount,
+          share_type: shareType,
+        });
+
+        await placeOrder(signedOrder);
+        setSuccessMessage("Order placed successfully!");
+      }
+
       setAmount("");
       fetchBalance();
     } catch (err) {
@@ -274,9 +322,9 @@ export function TradingPanel({
         </div>
 
         {/* Error Message */}
-        {orderError && (
+        {(orderError || ctfOrderError) && (
           <div className="bg-red-900/50 border border-red-700 rounded-lg p-3">
-            <p className="text-red-400 text-sm">{orderError}</p>
+            <p className="text-red-400 text-sm">{orderError || ctfOrderError}</p>
           </div>
         )}
 
@@ -290,9 +338,9 @@ export function TradingPanel({
         {/* Submit Button */}
         <button
           type="submit"
-          disabled={!isConnected || submitting || orderLoading || !amount}
+          disabled={!isConnected || submitting || orderLoading || ctfOrderLoading || !amount}
           className={`w-full py-3.5 md:py-3 px-4 rounded-lg font-medium text-base transition active:scale-[0.98] ${
-            !isConnected || submitting || orderLoading || !amount
+            !isConnected || submitting || orderLoading || ctfOrderLoading || !amount
               ? "bg-gray-600 text-gray-400 cursor-not-allowed"
               : side === "buy"
               ? "bg-green-600 hover:bg-green-700 text-white"
@@ -301,10 +349,22 @@ export function TradingPanel({
         >
           {!isConnected
             ? "Connect Wallet"
-            : submitting || orderLoading
+            : submitting || orderLoading || ctfOrderLoading
             ? "Signing..."
             : `${side === "buy" ? "Buy" : "Sell"} ${selectedOutcome.name} Shares`}
         </button>
+
+        {/* CTF Settlement Badge */}
+        {isCtfEnabled && (
+          <div className="mt-2 text-center">
+            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-primary-900/50 text-primary-400 border border-primary-700">
+              <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              On-Chain Settlement
+            </span>
+          </div>
+        )}
       </form>
     </div>
   );

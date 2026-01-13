@@ -679,3 +679,77 @@ export function useRedeemPositions() {
 
   return { redeemPositions, loading, error };
 }
+
+// ============================================================================
+// CTF Order API (On-Chain Settlement)
+// ============================================================================
+
+// CTF Order request type (matches backend CreateCtfOrderRequest)
+export interface CtfOrderRequest {
+  // Market identifiers
+  market_id: string;
+  outcome_id: string;
+  share_type: "yes" | "no";
+
+  // Order parameters
+  side: "buy" | "sell";
+  price: string;
+  amount: string;
+
+  // CTF-specific fields (for on-chain settlement)
+  token_id: string;
+  maker_amount: string;
+  taker_amount: string;
+  expiration: number;
+  nonce: number;
+  fee_rate_bps?: number;
+  sig_type?: number;
+
+  // EIP-712 signature
+  signature: string;
+}
+
+// CTF Order response type
+export interface CtfOrderResponse {
+  order_id: string;
+  market_id: string;
+  outcome_id: string;
+  share_type: "yes" | "no";
+  status: string;
+  filled_amount: string;
+  remaining_amount: string;
+  settlement_status: string;
+  created_at: number;
+}
+
+// Hook for placing CTF orders with on-chain settlement
+export function usePlaceCtfOrder() {
+  const { address } = useAccount();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const placeCtfOrder = useCallback(async (orderData: CtfOrderRequest): Promise<CtfOrderResponse> => {
+    if (!address) throw new Error("Wallet not connected");
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchApi<CtfOrderResponse>(
+        "/api/v1/orders/ctf",
+        {
+          method: "POST",
+          body: JSON.stringify(orderData),
+        },
+        address
+      );
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to place CTF order";
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  return { placeCtfOrder, loading, error };
+}

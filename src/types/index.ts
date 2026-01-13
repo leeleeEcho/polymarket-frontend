@@ -13,6 +13,10 @@ export interface Market {
   total_volume?: string;
   liquidity?: string;
   created_at: string;
+  // CTF on-chain fields
+  condition_id?: string;        // Gnosis CTF condition ID (bytes32)
+  yes_token_id?: string;        // ERC1155 token ID for Yes outcome
+  no_token_id?: string;         // ERC1155 token ID for No outcome
 }
 
 export interface Outcome {

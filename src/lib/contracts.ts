@@ -84,14 +84,14 @@ export interface NetworkConfig {
 
 // Network configurations
 export const NETWORK_CONFIG: Record<number, NetworkConfig> = {
-  // Ethereum Sepolia Testnet (Primary)
+  // Ethereum Sepolia Testnet (Primary) - v3 contracts deployed 2026-01-07
   11155111: {
     chainId: 11155111,
     name: "Sepolia",
-    usdcAddress: "0x38D9142f36aE7A3957c01dC2572DfA217AC59dE6", // Mock USDC on Sepolia
+    usdcAddress: "0xAb9e58c737b56b6fa4D1cfC53f8a09E07f3ebcB3", // Mock USDC on Sepolia (v3)
     vaultAddress: "0x6538469807e019E05c9ec4Bd158b12afB1DA50F3", // Admin wallet
-    ctfExchangeAddress: "0x023c3986F25A7e36357bb290c4CE040C602A0e77", // CTFExchange on Sepolia
-    conditionalTokensAddress: "0x3431D37cEF4E795eb43db8E35DBD291Fc1db57f3", // ConditionalTokens on Sepolia
+    ctfExchangeAddress: "0xB49b59457B5B0642e8d1d23c2CF601b9ECB51bDD", // CTFExchange on Sepolia (v3)
+    conditionalTokensAddress: "0xdec2dd853880ADB871762AbBC99642B49B905Eb0", // ConditionalTokens on Sepolia (v3)
     decimals: 6,
     blockExplorer: "https://sepolia.etherscan.io",
   },

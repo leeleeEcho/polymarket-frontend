@@ -4,9 +4,9 @@ import { useCallback } from "react";
 import { useAccount, useSignTypedData, useChainId } from "wagmi";
 import { getCtfExchangeAddress } from "@/lib/contracts";
 
-// EIP-712 Domain for CTFExchange
+// EIP-712 Domain for CTFExchange (must match contract constructor)
 const getCtfDomain = (chainId: number, exchangeAddress: `0x${string}`) => ({
-  name: "CTFExchange",
+  name: "PolymarketCTFExchange",  // Must match contract: EIP712("PolymarketCTFExchange", "1")
   version: "1",
   chainId,
   verifyingContract: exchangeAddress,
