@@ -15,32 +15,32 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#0ea5e9",
+  themeColor: "#000000",
 };
 
 export const metadata: Metadata = {
-  title: "nextX - Predict What's Next",
+  title: "9V Prediction - Predict the Future",
   description: "Decentralized prediction market platform. Trade on the outcome of real-world events.",
-  keywords: ["prediction market", "crypto", "trading", "DeFi", "Web3", "nextX"],
-  authors: [{ name: "nextX Team" }],
+  keywords: ["prediction market", "crypto", "trading", "DeFi", "Web3", "9V"],
+  authors: [{ name: "9V Team" }],
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
-    statusBarStyle: "black-translucent",
-    title: "nextX",
+    statusBarStyle: "default",
+    title: "9V",
   },
   formatDetection: {
     telephone: false,
   },
   openGraph: {
-    title: "nextX - Predict What's Next",
+    title: "9V Prediction - Predict the Future",
     description: "Decentralized prediction market platform. Trade on the outcome of real-world events.",
     type: "website",
     images: ["/logo.png"],
   },
   twitter: {
     card: "summary",
-    title: "nextX - Predict What's Next",
+    title: "9V Prediction - Predict the Future",
     description: "Decentralized prediction market platform.",
     images: ["/logo.png"],
   },
@@ -62,7 +62,7 @@ export default function RootLayout({
         <meta name="mobile-web-app-capable" content="yes" />
         <link rel="apple-touch-icon" href="/logo.png" />
       </head>
-      <body className={`${inter.className} bg-gray-900 text-white min-h-screen antialiased`}>
+      <body className={`${inter.className} bg-background text-foreground min-h-screen antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>

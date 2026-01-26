@@ -9,10 +9,9 @@ import { TradingPanel } from "@/components/TradingPanel";
 import { Orderbook } from "@/components/Orderbook";
 import { SettlementPanel } from "@/components/SettlementPanel";
 import { MintingPanel } from "@/components/MintingPanel";
-import { useMarket, useTrades, useOrders } from "@/hooks/useApi";
-import { getMarketUrl } from "@/types";
+import { useMarketBySlug, useTrades, useOrders } from "@/hooks/useApi";
 
-// Dynamic import for KlineChart to avoid SSR issues with lightweight-charts
+// Dynamic import for KlineChart to avoid SSR issues
 const KlineChart = dynamic(
   () => import("@/components/KlineChart").then((mod) => mod.KlineChart),
   {
@@ -24,20 +23,22 @@ const KlineChart = dynamic(
     )
   }
 );
+
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useAccount } from "wagmi";
 import type { Outcome, Trade } from "@/types";
+import { getMarketUrl } from "@/types";
 
 type TabType = "trade" | "orderbook" | "mint" | "history";
 
-// Legacy route - redirects to new /event/[slug] format
-export default function MarketPage() {
+export default function EventPage() {
   const params = useParams();
   const router = useRouter();
-  const marketId = params.id as string;
+  const slug = params.slug as string;
 
   const { isConnected } = useAccount();
-  const { market, loading, error, fetchMarket } = useMarket(marketId);
+  const { market, loading, error, fetchMarketBySlug } = useMarketBySlug(slug);
+  const marketId = market?.id || "";
   const { trades, fetchTrades } = useTrades(marketId);
   const { orders, fetchOrders, cancelOrder } = useOrders();
   const { isConnected: wsConnected, subscribe, addHandler } = useWebSocket();
@@ -46,18 +47,17 @@ export default function MarketPage() {
   const [recentTrades, setRecentTrades] = useState<Trade[]>([]);
   const [activeTab, setActiveTab] = useState<TabType>("trade");
 
+  // Fetch market by slug
   useEffect(() => {
-    fetchMarket();
-    fetchTrades();
-  }, [fetchMarket, fetchTrades]);
+    fetchMarketBySlug();
+  }, [fetchMarketBySlug]);
 
-  // Redirect to new /event/[slug] URL format
+  // Fetch trades when market is loaded
   useEffect(() => {
-    if (market) {
-      const newUrl = getMarketUrl(market);
-      router.replace(newUrl);
+    if (marketId) {
+      fetchTrades();
     }
-  }, [market, router]);
+  }, [marketId, fetchTrades]);
 
   useEffect(() => {
     if (isConnected) {
@@ -91,6 +91,17 @@ export default function MarketPage() {
   useEffect(() => {
     setRecentTrades(trades);
   }, [trades]);
+
+  // Update browser URL to canonical format
+  useEffect(() => {
+    if (market && slug) {
+      const canonicalUrl = getMarketUrl(market);
+      const currentPath = `/event/${slug}`;
+      if (canonicalUrl !== currentPath) {
+        window.history.replaceState(null, '', canonicalUrl);
+      }
+    }
+  }, [market, slug]);
 
   const marketOrders = orders.filter((o) => o.market_id === marketId);
 

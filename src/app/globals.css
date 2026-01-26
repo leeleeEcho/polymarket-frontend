@@ -2,47 +2,494 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground-rgb: 0, 0, 0;
-  --background-rgb: 255, 255, 255;
-}
+/* ============================================
+   9V PREDICTION MARKET - DESIGN SYSTEM
+   Brand: 9V | Style: Minimalist Technical
+   Theme: LIGHT (Monochromatic Black/White)
+   ============================================ */
 
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-rgb: 17, 24, 39;
+    --font-inter: "Inter", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", monospace;
+    --radius: 0.5rem;
+
+    /* Light mode - Pure Black & White */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 0%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 0%;
+    --primary: 0 0% 0%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 0%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 0%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 0 0% 0%;
+  }
+
+  .dark {
+    --background: 0 0% 4%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 20%;
+    --input: 0 0% 15%;
+    --ring: 0 0% 83%;
   }
 }
 
-body {
-  color: rgb(var(--foreground-rgb));
-  background: rgb(var(--background-rgb));
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
 }
 
-/* Custom scrollbar */
+html {
+  scroll-behavior: smooth;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  font-family: var(--font-inter);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================
+   TYPOGRAPHY
+   ============================================ */
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 300;
+  letter-spacing: -0.02em;
+}
+
+/* ============================================
+   SCROLLBAR
+   ============================================ */
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1f2937;
+  background: hsl(var(--muted));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #4b5563;
+  background: hsl(var(--muted-foreground));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #6b7280;
+  background: hsl(var(--foreground) / 0.5);
 }
 
-/* Order book styling */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ============================================
+   FOCUS STATES
+   ============================================ */
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.5s ease-out;
+}
+
+.animate-slideUp {
+  animation: slideUp 0.5s ease-out;
+}
+
+.animate-slideDown {
+  animation: slideDown 0.3s ease-out;
+}
+
+/* ============================================
+   HOVER EFFECTS
+   ============================================ */
+
+.hover-lift {
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.hover-scale {
+  transition: transform 0.2s ease;
+}
+
+.hover-scale:hover {
+  transform: scale(1.02);
+}
+
+/* ============================================
+   PATTERNS (Light Theme)
+   ============================================ */
+
+.grid-pattern {
+  background-image:
+    linear-gradient(to right, rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.circuit-pattern {
+  background-image:
+    radial-gradient(circle at 25% 25%, rgba(0, 0, 0, 0.05) 2px, transparent 2px),
+    radial-gradient(circle at 75% 75%, rgba(0, 0, 0, 0.05) 2px, transparent 2px);
+  background-size: 50px 50px;
+}
+
+/* ============================================
+   GLASS MORPHISM (Light Theme)
+   ============================================ */
+
+.glass {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.glass-light {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* ============================================
+   CARDS & CONTAINERS
+   ============================================ */
+
+.card-9v {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  transition: all 0.3s ease;
+}
+
+.card-9v:hover {
+  border-color: hsl(var(--foreground) / 0.2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.card-9v-active {
+  border: 2px solid hsl(var(--foreground));
+}
+
+/* Feature card with corner accents */
+.card-feature {
+  background: hsl(var(--card));
+  border: 2px solid hsl(var(--border));
+  border-radius: var(--radius);
+  transition: all 0.5s ease;
+  position: relative;
+}
+
+.card-feature:hover {
+  border-color: #a3a3a3;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+.card-feature.active {
+  border-color: #000;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+  transform: translateY(-4px);
+  background: #fafafa;
+}
+
+/* ============================================
+   STATUS INDICATORS
+   ============================================ */
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.status-dot-green {
+  background: #22c55e;
+}
+
+.status-dot-yellow {
+  background: #eab308;
+}
+
+.status-dot-red {
+  background: #ef4444;
+}
+
+.status-dot-blue {
+  background: #3b82f6;
+}
+
+.status-dot-black {
+  background: #000;
+}
+
+/* ============================================
+   ORDER BOOK STYLING
+   ============================================ */
+
 .orderbook-bid {
-  background: linear-gradient(to left, rgba(34, 197, 94, 0.2), transparent);
+  background: linear-gradient(to left, rgba(34, 197, 94, 0.1), transparent);
 }
 
 .orderbook-ask {
-  background: linear-gradient(to left, rgba(239, 68, 68, 0.2), transparent);
+  background: linear-gradient(to left, rgba(239, 68, 68, 0.1), transparent);
+}
+
+/* ============================================
+   BUTTONS
+   ============================================ */
+
+.btn-9v {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.625rem 1.25rem;
+  font-weight: 500;
+  font-size: 0.875rem;
+  border-radius: calc(var(--radius) - 2px);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-9v-primary {
+  background: #000;
+  color: #fff;
+  border: none;
+}
+
+.btn-9v-primary:hover {
+  background: #262626;
+}
+
+.btn-9v-outline {
+  background: transparent;
+  color: #000;
+  border: 1px solid hsl(var(--border));
+}
+
+.btn-9v-outline:hover {
+  border-color: #000;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.btn-9v-ghost {
+  background: transparent;
+  color: #000;
+  border: none;
+}
+
+.btn-9v-ghost:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* ============================================
+   METRIC DISPLAYS
+   ============================================ */
+
+.metric-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #000;
+}
+
+.metric-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ============================================
+   FORM INPUTS
+   ============================================ */
+
+.input-9v {
+  width: 100%;
+  height: 40px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  transition: border-color 0.2s ease;
+}
+
+.input-9v:focus {
+  outline: none;
+  border-color: #000;
+}
+
+.input-9v::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+/* ============================================
+   BADGES
+   ============================================ */
+
+.badge-9v {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 9999px;
+  border: 1px solid;
+}
+
+.badge-9v-default {
+  background: #f5f5f5;
+  border-color: #e5e5e5;
+  color: #525252;
+}
+
+.badge-9v-outline {
+  background: transparent;
+  border-color: #e5e5e5;
+  color: #525252;
+}
+
+/* ============================================
+   ACCESSIBILITY
+   ============================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: high) {
+  .card-9v {
+    border-width: 2px;
+  }
+}
+
+/* ============================================
+   PRINT STYLES
+   ============================================ */
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* ============================================
+   MOBILE OPTIMIZATIONS
+   ============================================ */
+
+@media (max-width: 768px) {
+  .hide-mobile {
+    display: none;
+  }
+}
+
+@media (min-width: 769px) {
+  .hide-desktop {
+    display: none;
+  }
 }

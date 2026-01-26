@@ -83,11 +83,11 @@ export function MintingPanel({ market }: MintingPanelProps) {
       );
 
   return (
-    <div className="bg-gray-800 rounded-xl p-4 md:p-6 border border-gray-700">
-      <h3 className="text-lg font-semibold text-white mb-4">Mint / Burn Tokens</h3>
+    <div className="card-9v p-4 md:p-6">
+      <h3 className="text-lg font-medium text-foreground mb-4">Mint / Burn Tokens</h3>
 
       {/* Info text */}
-      <p className="text-sm text-gray-400 mb-4">
+      <p className="text-sm text-muted-foreground mb-4">
         {mode === "mint"
           ? "Convert USDC to equal amounts of Yes and No tokens."
           : "Burn equal amounts of Yes and No tokens back to USDC."}
@@ -100,8 +100,8 @@ export function MintingPanel({ market }: MintingPanelProps) {
             onClick={() => setMode("mint")}
             className={`py-2.5 px-4 rounded-lg font-medium transition ${
               mode === "mint"
-                ? "bg-green-600 text-white"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                ? "bg-success text-white"
+                : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
             }`}
           >
             Mint Tokens
@@ -110,8 +110,8 @@ export function MintingPanel({ market }: MintingPanelProps) {
             onClick={() => setMode("burn")}
             className={`py-2.5 px-4 rounded-lg font-medium transition ${
               mode === "burn"
-                ? "bg-red-600 text-white"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                ? "bg-destructive text-white"
+                : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
             }`}
           >
             Burn Tokens
@@ -121,16 +121,16 @@ export function MintingPanel({ market }: MintingPanelProps) {
 
       {/* Current Positions */}
       {position && (parseFloat(position.yes_balance) > 0 || parseFloat(position.no_balance) > 0) && (
-        <div className="bg-gray-700/50 rounded-lg p-3 mb-4">
-          <p className="text-sm text-gray-400 mb-2">Your Token Positions</p>
+        <div className="bg-secondary/50 rounded-lg p-3 mb-4">
+          <p className="text-sm text-muted-foreground mb-2">Your Token Positions</p>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <span className="text-green-400 font-medium">Yes: </span>
-              <span className="text-white">{position.yes_balance}</span>
+              <span className="text-success font-medium">Yes: </span>
+              <span className="text-foreground font-mono">{position.yes_balance}</span>
             </div>
             <div>
-              <span className="text-red-400 font-medium">No: </span>
-              <span className="text-white">{position.no_balance}</span>
+              <span className="text-destructive font-medium">No: </span>
+              <span className="text-foreground font-mono">{position.no_balance}</span>
             </div>
           </div>
         </div>
@@ -140,14 +140,14 @@ export function MintingPanel({ market }: MintingPanelProps) {
         {/* Amount Input */}
         <div>
           <div className="flex justify-between mb-2">
-            <label className="text-sm text-gray-400">
+            <label className="text-sm text-muted-foreground">
               {mode === "mint" ? "USDC Amount" : "Tokens to Burn"}
             </label>
             {maxAmount > 0 && (
               <button
                 type="button"
                 onClick={() => setAmount(maxAmount.toString())}
-                className="text-xs text-primary-400 hover:text-primary-300"
+                className="text-xs text-foreground hover:text-foreground/80 font-medium"
               >
                 Max: {maxAmount.toFixed(2)}
               </button>
@@ -161,10 +161,10 @@ export function MintingPanel({ market }: MintingPanelProps) {
               onChange={(e) => setAmount(e.target.value)}
               min="0.01"
               step="0.01"
-              className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 px-4 text-white text-base focus:outline-none focus:border-primary-500"
+              className="w-full bg-input border border-border rounded-lg py-3 px-4 text-foreground text-base font-mono focus:outline-none focus:border-foreground/50"
               placeholder="100"
             />
-            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
               {mode === "mint" ? "USDC" : "Pairs"}
             </span>
           </div>
@@ -175,7 +175,7 @@ export function MintingPanel({ market }: MintingPanelProps) {
                 key={amt}
                 type="button"
                 onClick={() => setAmount(amt.toString())}
-                className="py-1.5 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition"
+                className="py-1.5 text-xs bg-secondary text-muted-foreground rounded hover:bg-secondary/80 hover:text-foreground transition font-mono"
               >
                 {amt}
               </button>
@@ -184,18 +184,18 @@ export function MintingPanel({ market }: MintingPanelProps) {
         </div>
 
         {/* Operation Summary */}
-        <div className="bg-gray-700/50 rounded-lg p-3 space-y-2">
+        <div className="bg-secondary/50 rounded-lg p-3 space-y-2">
           {mode === "mint" ? (
             <>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">USDC to Convert</span>
-                <span className="text-white font-medium">
+                <span className="text-muted-foreground">USDC to Convert</span>
+                <span className="text-foreground font-medium font-mono">
                   {parseFloat(amount || "0").toFixed(2)} USDC
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">You Receive</span>
-                <span className="text-green-400 font-medium">
+                <span className="text-muted-foreground">You Receive</span>
+                <span className="text-success font-medium font-mono">
                   {parseFloat(amount || "0").toFixed(2)} Yes + {parseFloat(amount || "0").toFixed(2)} No
                 </span>
               </div>
@@ -203,22 +203,22 @@ export function MintingPanel({ market }: MintingPanelProps) {
           ) : (
             <>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Tokens to Burn</span>
-                <span className="text-white font-medium">
+                <span className="text-muted-foreground">Tokens to Burn</span>
+                <span className="text-foreground font-medium font-mono">
                   {parseFloat(amount || "0").toFixed(2)} Yes + {parseFloat(amount || "0").toFixed(2)} No
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">You Receive</span>
-                <span className="text-green-400 font-medium">
+                <span className="text-muted-foreground">You Receive</span>
+                <span className="text-success font-medium font-mono">
                   {parseFloat(amount || "0").toFixed(2)} USDC
                 </span>
               </div>
             </>
           )}
-          <div className="flex justify-between text-sm pt-2 border-t border-gray-600">
-            <span className="text-gray-400">Available USDC</span>
-            <span className="text-white">
+          <div className="flex justify-between text-sm pt-2 border-t border-border">
+            <span className="text-muted-foreground">Available USDC</span>
+            <span className="text-foreground font-mono">
               {usdcBalance ? parseFloat(usdcBalance.available).toFixed(2) : "0.00"} USDC
             </span>
           </div>
@@ -226,21 +226,21 @@ export function MintingPanel({ market }: MintingPanelProps) {
 
         {/* Error Message */}
         {error && (
-          <div className="bg-red-900/50 border border-red-700 rounded-lg p-3">
-            <p className="text-red-400 text-sm">{error}</p>
+          <div className="card-9v p-3 border-destructive/50">
+            <p className="text-destructive text-sm">{error}</p>
           </div>
         )}
 
         {/* Success Message */}
         {successMessage && (
-          <div className="bg-green-900/50 border border-green-700 rounded-lg p-3">
-            <p className="text-green-400 text-sm">{successMessage}</p>
+          <div className="card-9v p-3 border-success/50">
+            <p className="text-success text-sm">{successMessage}</p>
             {txHash && txHash !== "already_prepared" && (
               <a
                 href={`https://sepolia.etherscan.io/tx/${txHash}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-primary-400 hover:underline mt-1 block"
+                className="text-xs text-info hover:underline mt-1 block font-mono"
               >
                 View on Etherscan
               </a>
@@ -254,10 +254,10 @@ export function MintingPanel({ market }: MintingPanelProps) {
           disabled={!isConnected || submitting || loading || !amount || parseFloat(amount) <= 0}
           className={`w-full py-3.5 px-4 rounded-lg font-medium text-base transition active:scale-[0.98] ${
             !isConnected || submitting || loading || !amount || parseFloat(amount) <= 0
-              ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+              ? "bg-muted text-muted-foreground cursor-not-allowed"
               : mode === "mint"
-              ? "bg-green-600 hover:bg-green-700 text-white"
-              : "bg-red-600 hover:bg-red-700 text-white"
+              ? "bg-success hover:bg-success/90 text-white"
+              : "bg-destructive hover:bg-destructive/90 text-white"
           }`}
         >
           {!isConnected
@@ -270,7 +270,7 @@ export function MintingPanel({ market }: MintingPanelProps) {
         </button>
 
         {/* Disclaimer */}
-        <p className="text-xs text-gray-500 text-center mt-2">
+        <p className="text-xs text-muted-foreground text-center mt-2">
           This operation will execute an on-chain transaction.
         </p>
       </form>

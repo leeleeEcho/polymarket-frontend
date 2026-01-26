@@ -121,11 +121,11 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
   const getDepositStepColor = (currentStep: DepositStep) => {
     switch (currentStep) {
       case "complete":
-        return "text-green-400";
+        return "text-success";
       case "error":
-        return "text-red-400";
+        return "text-destructive";
       default:
-        return "text-blue-400";
+        return "text-info";
     }
   };
 
@@ -133,11 +133,11 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
   const getWithdrawStepColor = (currentStep: WithdrawStep) => {
     switch (currentStep) {
       case "complete":
-        return "text-green-400";
+        return "text-success";
       case "error":
-        return "text-red-400";
+        return "text-destructive";
       default:
-        return "text-blue-400";
+        return "text-info";
     }
   };
 
@@ -146,26 +146,27 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
   }
 
   return (
-    <div className="bg-gray-800 rounded-xl p-4 md:p-6 mb-4 md:mb-8 border border-gray-700">
+    <div className="card-9v p-4 md:p-6 mb-6 md:mb-8">
       {/* Header - Collapsible on mobile */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-center justify-between md:cursor-default"
       >
         <div className="flex items-center gap-3">
-          <h2 className="text-lg md:text-xl font-bold text-white">Balance</h2>
-          <span className="text-lg md:text-xl font-bold text-primary-400">
-            {usdcBalance ? parseFloat(usdcBalance.available).toFixed(2) : "0.00"} USDC
+          <h2 className="text-lg font-medium text-foreground">Balance</h2>
+          <span className="metric-value text-xl text-foreground">
+            {usdcBalance ? parseFloat(usdcBalance.available).toFixed(2) : "0.00"}
           </span>
+          <span className="text-muted-foreground text-sm">USDC</span>
         </div>
         <div className="flex items-center gap-2">
-          {/* Mode indicator - Always visible */}
-          <span className="hidden sm:inline text-xs text-gray-500">
-            {useOnChain ? (useApproveMode ? "Approve" : "Vault") : "Test"}
+          {/* Mode indicator */}
+          <span className="hidden sm:inline px-2 py-1 bg-secondary rounded text-xs font-mono text-muted-foreground">
+            {useOnChain ? (useApproveMode ? "APPROVE" : "VAULT") : "TEST"}
           </span>
           {/* Expand/Collapse icon - Mobile only */}
           <svg
-            className={`w-5 h-5 text-gray-400 md:hidden transition-transform ${isExpanded ? "rotate-180" : ""}`}
+            className={`w-5 h-5 text-muted-foreground md:hidden transition-transform ${isExpanded ? "rotate-180" : ""}`}
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -179,7 +180,7 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
       <div className={`${isExpanded ? "block" : "hidden"} md:block mt-4`}>
         {/* Mode selector */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
-          <span className="text-sm text-gray-400">Mode:</span>
+          <span className="text-sm text-muted-foreground">Mode:</span>
           <div className="flex gap-1">
             <button
               onClick={() => {
@@ -187,10 +188,10 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                 resetDeposit();
                 resetWithdraw();
               }}
-              className={`px-3 py-1.5 rounded text-sm transition ${
+              className={`px-3 py-1.5 rounded text-sm font-medium transition ${
                 !useOnChain
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600 active:bg-gray-600"
+                  ? "bg-foreground text-background"
+                  : "bg-secondary text-muted-foreground hover:text-foreground"
               }`}
             >
               Test
@@ -200,10 +201,10 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                 setUseOnChain(true);
                 setUseApproveMode(true);
               }}
-              className={`px-3 py-1.5 rounded text-sm transition ${
+              className={`px-3 py-1.5 rounded text-sm font-medium transition ${
                 useOnChain && useApproveMode
-                  ? "bg-green-600 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600 active:bg-gray-600"
+                  ? "bg-success text-white"
+                  : "bg-secondary text-muted-foreground hover:text-foreground"
               }`}
               title="Polymarket-style: Approve USDC for CTFExchange"
             >
@@ -214,10 +215,10 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                 setUseOnChain(true);
                 setUseApproveMode(false);
               }}
-              className={`px-3 py-1.5 rounded text-sm transition ${
+              className={`px-3 py-1.5 rounded text-sm font-medium transition ${
                 useOnChain && !useApproveMode
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600 active:bg-gray-600"
+                  ? "bg-info text-white"
+                  : "bg-secondary text-muted-foreground hover:text-foreground"
               }`}
               title="Legacy: Transfer USDC to vault"
             >
@@ -228,8 +229,8 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
 
         {/* Network warning for on-chain mode */}
         {useOnChain && !isChainSupported && (
-          <div className="bg-yellow-900/50 border border-yellow-700 rounded-lg p-3 mb-4">
-            <p className="text-yellow-400 text-sm">
+          <div className="bg-warning/10 border border-warning/30 rounded-lg p-3 mb-4">
+            <p className="text-warning text-sm">
               Please switch to Polygon or Polygon Amoy to use on-chain deposits.
             </p>
           </div>
@@ -237,27 +238,27 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
 
         {/* Network info for on-chain mode */}
         {useOnChain && isChainSupported && networkConfig && (
-          <div className="bg-gray-700/50 rounded-lg p-3 mb-4">
+          <div className="bg-secondary/50 rounded-lg p-3 mb-4">
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div>
-                <span className="text-gray-400">Network:</span>
-                <span className="text-white ml-2">{networkConfig.name}</span>
+                <span className="text-muted-foreground">Network:</span>
+                <span className="text-foreground ml-2 font-mono">{networkConfig.name}</span>
               </div>
               <div>
-                <span className="text-gray-400">Wallet:</span>
-                <span className="text-white ml-2">{walletUsdcBalance} USDC</span>
+                <span className="text-muted-foreground">Wallet:</span>
+                <span className="text-foreground ml-2 font-mono">{walletUsdcBalance} USDC</span>
               </div>
               {useApproveMode && ctfExchangeAddress && (
                 <>
                   <div>
-                    <span className="text-gray-400">Allowance:</span>
-                    <span className={`ml-2 ${parseFloat(ctfAllowance) > 0 ? 'text-green-400' : 'text-yellow-400'}`}>
+                    <span className="text-muted-foreground">Allowance:</span>
+                    <span className={`ml-2 font-mono ${parseFloat(ctfAllowance) > 0 ? 'text-success' : 'text-warning'}`}>
                       {parseFloat(ctfAllowance) > 1e12 ? 'Unlimited' : `${ctfAllowance}`}
                     </span>
                   </div>
                   <div>
-                    <span className="text-gray-400">CTF:</span>
-                    <span className="text-gray-300 ml-2 text-xs font-mono">
+                    <span className="text-muted-foreground">CTF:</span>
+                    <span className="text-muted-foreground ml-2 text-xs font-mono">
                       {ctfExchangeAddress.slice(0, 6)}...{ctfExchangeAddress.slice(-4)}
                     </span>
                   </div>
@@ -270,30 +271,30 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
         {/* Balance and Actions Grid */}
         <div className="space-y-4 md:space-y-0 md:grid md:grid-cols-3 md:gap-6">
           {/* Current Balance - Hidden on mobile (shown in header) */}
-          <div className="hidden md:block bg-gray-700 rounded-lg p-4">
-            <p className="text-gray-400 text-sm mb-1">Platform Balance</p>
-            <p className="text-2xl font-bold text-white">
+          <div className="hidden md:block bg-secondary rounded-lg p-4">
+            <p className="metric-label mb-1">Platform Balance</p>
+            <p className="metric-value text-2xl text-foreground">
               {usdcBalance ? parseFloat(usdcBalance.available).toFixed(2) : "0.00"} USDC
             </p>
             {usdcBalance && parseFloat(usdcBalance.frozen) > 0 && (
-              <p className="text-sm text-gray-400 mt-1">
+              <p className="text-sm text-muted-foreground mt-1">
                 + {parseFloat(usdcBalance.frozen).toFixed(2)} frozen
               </p>
             )}
           </div>
 
           {/* Mobile Balance Card */}
-          <div className="md:hidden bg-gray-700/50 rounded-lg p-3">
+          <div className="md:hidden bg-secondary/50 rounded-lg p-3">
             <div className="flex justify-between items-center">
-              <span className="text-gray-400 text-sm">Available</span>
-              <span className="text-white font-medium">
+              <span className="text-muted-foreground text-sm">Available</span>
+              <span className="text-foreground font-mono font-medium">
                 {usdcBalance ? parseFloat(usdcBalance.available).toFixed(2) : "0.00"} USDC
               </span>
             </div>
             {usdcBalance && parseFloat(usdcBalance.frozen) > 0 && (
               <div className="flex justify-between items-center mt-1">
-                <span className="text-gray-400 text-sm">Frozen</span>
-                <span className="text-gray-400 font-medium">
+                <span className="text-muted-foreground text-sm">Frozen</span>
+                <span className="text-muted-foreground font-mono">
                   {parseFloat(usdcBalance.frozen).toFixed(2)} USDC
                 </span>
               </div>
@@ -302,7 +303,7 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
 
           {/* Deposit / Approve */}
           <div>
-            <label className="block text-sm text-gray-400 mb-2">
+            <label className="block text-sm text-muted-foreground mb-2">
               {useOnChain && useApproveMode
                 ? "Enable USDC"
                 : useOnChain
@@ -317,7 +318,7 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                 onChange={(e) => setDepositAmount(e.target.value)}
                 placeholder="Amount"
                 disabled={useOnChain ? depositLoading : devDepositLoading}
-                className="flex-1 min-w-0 bg-gray-700 border border-gray-600 rounded-lg py-2.5 px-3 text-white text-base focus:outline-none focus:border-primary-500 disabled:opacity-50"
+                className="flex-1 min-w-0 bg-input border border-border rounded-lg py-2.5 px-3 text-foreground font-mono text-base focus:outline-none focus:border-foreground/50 disabled:opacity-50"
               />
               <button
                 onClick={useOnChain ? handleOnChainDeposit : handleDevDeposit}
@@ -326,7 +327,7 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                     ? depositLoading || !depositAmount || !isChainSupported
                     : devDepositLoading || !depositAmount
                 }
-                className="px-4 py-2.5 bg-green-600 hover:bg-green-700 active:bg-green-800 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg text-white font-medium transition whitespace-nowrap"
+                className="px-4 py-2.5 bg-success hover:bg-success/90 disabled:bg-muted disabled:cursor-not-allowed rounded-lg text-white font-medium transition whitespace-nowrap"
               >
                 {useOnChain
                   ? depositLoading
@@ -342,8 +343,8 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
 
             {/* On-chain deposit progress */}
             {useOnChain && depositStep !== "idle" && (
-              <div className="mt-3 p-3 bg-gray-900 rounded-lg">
-                <p className={`text-sm ${getDepositStepColor(depositStep)}`}>
+              <div className="mt-3 p-3 bg-secondary rounded-lg">
+                <p className={`text-sm font-mono ${getDepositStepColor(depositStep)}`}>
                   {getDepositStepLabel(depositStep)}
                 </p>
                 {depositTxHash && (
@@ -351,18 +352,18 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                     href={`${networkConfig?.blockExplorer}/tx/${depositTxHash}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-blue-400 hover:underline mt-1 block truncate"
+                    className="text-xs text-info hover:underline mt-1 block truncate font-mono"
                   >
                     View tx: {depositTxHash.slice(0, 10)}...{depositTxHash.slice(-8)}
                   </a>
                 )}
                 {depositResult && (
-                  <p className="text-xs text-green-400 mt-1">
+                  <p className="text-xs text-success mt-1 font-mono">
                     New balance: {parseFloat(depositResult.new_balance).toFixed(2)} USDC
                   </p>
                 )}
                 {depositError && (
-                  <p className="text-xs text-red-400 mt-1">{depositError}</p>
+                  <p className="text-xs text-destructive mt-1">{depositError}</p>
                 )}
               </div>
             )}
@@ -370,7 +371,7 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
 
           {/* Withdraw */}
           <div>
-            <label className="block text-sm text-gray-400 mb-2">
+            <label className="block text-sm text-muted-foreground mb-2">
               Withdraw USDC
             </label>
             <div className="flex gap-2">
@@ -381,7 +382,7 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                 onChange={(e) => setWithdrawAmount(e.target.value)}
                 placeholder="Amount"
                 disabled={useOnChain ? withdrawLoading : devWithdrawLoading}
-                className="flex-1 min-w-0 bg-gray-700 border border-gray-600 rounded-lg py-2.5 px-3 text-white text-base focus:outline-none focus:border-primary-500 disabled:opacity-50"
+                className="flex-1 min-w-0 bg-input border border-border rounded-lg py-2.5 px-3 text-foreground font-mono text-base focus:outline-none focus:border-foreground/50 disabled:opacity-50"
               />
               <button
                 onClick={useOnChain ? handleOnChainWithdraw : handleDevWithdraw}
@@ -390,7 +391,7 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                     ? withdrawLoading || !withdrawAmount || !isChainSupported
                     : devWithdrawLoading || !withdrawAmount
                 }
-                className="px-4 py-2.5 bg-red-600 hover:bg-red-700 active:bg-red-800 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg text-white font-medium transition whitespace-nowrap"
+                className="px-4 py-2.5 bg-destructive hover:bg-destructive/90 disabled:bg-muted disabled:cursor-not-allowed rounded-lg text-white font-medium transition whitespace-nowrap"
               >
                 {useOnChain
                   ? withdrawLoading
@@ -404,8 +405,8 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
 
             {/* On-chain withdraw progress */}
             {useOnChain && withdrawStep !== "idle" && (
-              <div className="mt-3 p-3 bg-gray-900 rounded-lg">
-                <p className={`text-sm ${getWithdrawStepColor(withdrawStep)}`}>
+              <div className="mt-3 p-3 bg-secondary rounded-lg">
+                <p className={`text-sm font-mono ${getWithdrawStepColor(withdrawStep)}`}>
                   {getWithdrawStepLabel(withdrawStep)}
                 </p>
                 {withdrawTxHash && (
@@ -413,18 +414,18 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
                     href={`${networkConfig?.blockExplorer}/tx/${withdrawTxHash}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-blue-400 hover:underline mt-1 block truncate"
+                    className="text-xs text-info hover:underline mt-1 block truncate font-mono"
                   >
                     View tx: {withdrawTxHash.slice(0, 10)}...{withdrawTxHash.slice(-8)}
                   </a>
                 )}
                 {withdrawResult && (
-                  <p className="text-xs text-green-400 mt-1">
+                  <p className="text-xs text-success mt-1 font-mono">
                     New balance: {parseFloat(withdrawResult.new_balance).toFixed(2)} USDC
                   </p>
                 )}
                 {withdrawError && (
-                  <p className="text-xs text-red-400 mt-1">{withdrawError}</p>
+                  <p className="text-xs text-destructive mt-1">{withdrawError}</p>
                 )}
               </div>
             )}
@@ -434,8 +435,8 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
         {/* Message */}
         {message && (
           <p
-            className={`mt-4 text-sm ${
-              message.includes("failed") ? "text-red-400" : "text-green-400"
+            className={`mt-4 text-sm font-mono ${
+              message.includes("failed") ? "text-destructive" : "text-success"
             }`}
           >
             {message}
@@ -443,7 +444,7 @@ export function DepositPanel({ onBalanceUpdate }: DepositPanelProps) {
         )}
 
         {/* Mode description - Hidden on mobile by default */}
-        <p className="hidden md:block mt-4 text-xs text-gray-500">
+        <p className="hidden md:block mt-4 text-xs text-muted-foreground">
           {useOnChain
             ? useApproveMode
               ? "Approve mode (Polymarket style): USDC stays in your wallet. You approve CTFExchange to spend it during trades. Gas-efficient!"

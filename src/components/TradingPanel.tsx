@@ -126,12 +126,12 @@ export function TradingPanel({
   const quickAmounts = [10, 50, 100, 500];
 
   return (
-    <div className="bg-gray-800 rounded-xl p-4 md:p-6 border border-gray-700">
-      <h3 className="text-lg font-semibold text-white mb-4">Trade</h3>
+    <div className="card-9v p-4 md:p-6">
+      <h3 className="text-lg font-medium text-foreground mb-4">Trade</h3>
 
       {/* Outcome Selection */}
       <div className="mb-4">
-        <label className="block text-sm text-gray-400 mb-2">Outcome</label>
+        <label className="block text-sm text-muted-foreground mb-2">Outcome</label>
         <div className="grid grid-cols-2 gap-2">
           {market.outcomes.map((outcome) => (
             <button
@@ -143,9 +143,9 @@ export function TradingPanel({
               className={`py-2.5 md:py-2 px-3 md:px-4 rounded-lg font-medium text-sm md:text-base transition ${
                 selectedOutcome.id === outcome.id
                   ? outcome.name.toLowerCase() === "yes"
-                    ? "bg-green-600 text-white"
-                    : "bg-red-600 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600 active:bg-gray-600"
+                    ? "bg-success text-white"
+                    : "bg-destructive text-white"
+                  : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
               }`}
             >
               {outcome.name} ({((Number(outcome.probability) || 0.5) * 100).toFixed(0)}%)
@@ -161,8 +161,8 @@ export function TradingPanel({
             onClick={() => setSide("buy")}
             className={`py-2.5 md:py-2 px-4 rounded-lg font-medium transition ${
               side === "buy"
-                ? "bg-green-600 text-white"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600 active:bg-gray-600"
+                ? "bg-success text-white"
+                : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
             }`}
           >
             Buy
@@ -171,8 +171,8 @@ export function TradingPanel({
             onClick={() => setSide("sell")}
             className={`py-2.5 md:py-2 px-4 rounded-lg font-medium transition ${
               side === "sell"
-                ? "bg-red-600 text-white"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600 active:bg-gray-600"
+                ? "bg-destructive text-white"
+                : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
             }`}
           >
             Sell
@@ -182,14 +182,14 @@ export function TradingPanel({
 
       {/* Order Type */}
       <div className="mb-4">
-        <label className="block text-sm text-gray-400 mb-2">Order Type</label>
+        <label className="block text-sm text-muted-foreground mb-2">Order Type</label>
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => setOrderType("limit")}
             className={`py-2 px-4 rounded-lg font-medium text-sm transition ${
               orderType === "limit"
-                ? "bg-primary-600 text-white"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600 active:bg-gray-600"
+                ? "bg-foreground text-background"
+                : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
             }`}
           >
             Limit
@@ -198,8 +198,8 @@ export function TradingPanel({
             onClick={() => setOrderType("market")}
             className={`py-2 px-4 rounded-lg font-medium text-sm transition ${
               orderType === "market"
-                ? "bg-primary-600 text-white"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600 active:bg-gray-600"
+                ? "bg-foreground text-background"
+                : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
             }`}
           >
             Market
@@ -211,7 +211,7 @@ export function TradingPanel({
         {/* Price Input (only for limit orders) */}
         {orderType === "limit" && (
           <div>
-            <label className="block text-sm text-gray-400 mb-2">
+            <label className="block text-sm text-muted-foreground mb-2">
               Price (0.01 - 0.99)
             </label>
             <div className="relative">
@@ -223,10 +223,10 @@ export function TradingPanel({
                 min="0.01"
                 max="0.99"
                 step="0.01"
-                className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 px-4 text-white text-base focus:outline-none focus:border-primary-500"
+                className="w-full bg-input border border-border rounded-lg py-3 px-4 text-foreground text-base font-mono focus:outline-none focus:border-foreground/50"
                 placeholder="0.50"
               />
-              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
                 USDC
               </span>
             </div>
@@ -237,7 +237,7 @@ export function TradingPanel({
                   key={p}
                   type="button"
                   onClick={() => setPrice(p.toString())}
-                  className="flex-1 py-1.5 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition"
+                  className="flex-1 py-1.5 text-xs bg-secondary text-muted-foreground rounded hover:bg-secondary/80 hover:text-foreground transition font-mono"
                 >
                   {p}
                 </button>
@@ -249,7 +249,7 @@ export function TradingPanel({
         {/* Amount Input */}
         <div>
           <div className="flex justify-between mb-2">
-            <label className="text-sm text-gray-400">
+            <label className="text-sm text-muted-foreground">
               Shares to {side}
             </label>
             {usdcBalance && (
@@ -259,7 +259,7 @@ export function TradingPanel({
                   const maxShares = Math.floor(parseFloat(usdcBalance.available) / parseFloat(price));
                   setAmount(maxShares.toString());
                 }}
-                className="text-xs text-primary-400 hover:text-primary-300"
+                className="text-xs text-foreground hover:text-foreground/80 font-medium"
               >
                 Max
               </button>
@@ -273,10 +273,10 @@ export function TradingPanel({
               onChange={(e) => setAmount(e.target.value)}
               min="1"
               step="1"
-              className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 px-4 text-white text-base focus:outline-none focus:border-primary-500"
+              className="w-full bg-input border border-border rounded-lg py-3 px-4 text-foreground text-base font-mono focus:outline-none focus:border-foreground/50"
               placeholder="100"
             />
-            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
               Shares
             </span>
           </div>
@@ -287,7 +287,7 @@ export function TradingPanel({
                 key={amt}
                 type="button"
                 onClick={() => setAmount(amt.toString())}
-                className="py-1.5 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition"
+                className="py-1.5 text-xs bg-secondary text-muted-foreground rounded hover:bg-secondary/80 hover:text-foreground transition font-mono"
               >
                 {amt}
               </button>
@@ -296,26 +296,26 @@ export function TradingPanel({
         </div>
 
         {/* Order Summary */}
-        <div className="bg-gray-700/50 rounded-lg p-3 md:p-4 space-y-2">
+        <div className="bg-secondary/50 rounded-lg p-3 md:p-4 space-y-2">
           <div className="flex justify-between text-sm">
-            <span className="text-gray-400">
+            <span className="text-muted-foreground">
               {side === "buy" ? "Cost" : "Return"}
             </span>
-            <span className="text-white font-medium">
+            <span className="text-foreground font-medium font-mono">
               {estimatedCost.toFixed(2)} USDC
             </span>
           </div>
           {side === "buy" && (
             <div className="flex justify-between text-sm">
-              <span className="text-gray-400">Potential Profit</span>
-              <span className="text-green-400 font-medium">
+              <span className="text-muted-foreground">Potential Profit</span>
+              <span className="text-success font-medium font-mono">
                 +{potentialReturn.toFixed(2)} USDC
               </span>
             </div>
           )}
-          <div className="flex justify-between text-sm pt-2 border-t border-gray-600">
-            <span className="text-gray-400">Available</span>
-            <span className="text-white">
+          <div className="flex justify-between text-sm pt-2 border-t border-border">
+            <span className="text-muted-foreground">Available</span>
+            <span className="text-foreground font-mono">
               {usdcBalance ? parseFloat(usdcBalance.available).toFixed(2) : "0.00"} USDC
             </span>
           </div>
@@ -323,15 +323,15 @@ export function TradingPanel({
 
         {/* Error Message */}
         {(orderError || ctfOrderError) && (
-          <div className="bg-red-900/50 border border-red-700 rounded-lg p-3">
-            <p className="text-red-400 text-sm">{orderError || ctfOrderError}</p>
+          <div className="card-9v p-3 border-destructive/50">
+            <p className="text-destructive text-sm">{orderError || ctfOrderError}</p>
           </div>
         )}
 
         {/* Success Message */}
         {successMessage && (
-          <div className="bg-green-900/50 border border-green-700 rounded-lg p-3">
-            <p className="text-green-400 text-sm">{successMessage}</p>
+          <div className="card-9v p-3 border-success/50">
+            <p className="text-success text-sm">{successMessage}</p>
           </div>
         )}
 
@@ -341,10 +341,10 @@ export function TradingPanel({
           disabled={!isConnected || submitting || orderLoading || ctfOrderLoading || !amount}
           className={`w-full py-3.5 md:py-3 px-4 rounded-lg font-medium text-base transition active:scale-[0.98] ${
             !isConnected || submitting || orderLoading || ctfOrderLoading || !amount
-              ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+              ? "bg-muted text-muted-foreground cursor-not-allowed"
               : side === "buy"
-              ? "bg-green-600 hover:bg-green-700 text-white"
-              : "bg-red-600 hover:bg-red-700 text-white"
+              ? "bg-success hover:bg-success/90 text-white"
+              : "bg-destructive hover:bg-destructive/90 text-white"
           }`}
         >
           {!isConnected
@@ -357,7 +357,7 @@ export function TradingPanel({
         {/* CTF Settlement Badge */}
         {isCtfEnabled && (
           <div className="mt-2 text-center">
-            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-primary-900/50 text-primary-400 border border-primary-700">
+            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-info/20 text-info border border-info/30">
               <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>

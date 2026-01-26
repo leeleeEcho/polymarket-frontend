@@ -75,6 +75,51 @@ export function useMarket(marketId: string) {
   return { market, loading, error, fetchMarket };
 }
 
+// Hook for fetching market by slug (Polymarket-style URLs)
+export function useMarketBySlug(slug: string) {
+  const [market, setMarket] = useState<Market | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchMarketBySlug = useCallback(async () => {
+    if (!slug) return;
+    setLoading(true);
+    setError(null);
+    try {
+      // Extract the ID suffix from slug (last part after final hyphen)
+      const idSuffix = slug.split('-').pop() || '';
+
+      // Fetch all markets and find matching one
+      const data = await fetchApi<{ markets: Market[] }>("/api/v1/markets");
+      const markets = data.markets || [];
+
+      // Find market where ID ends with the suffix (case insensitive)
+      const found = markets.find(m => {
+        const cleanId = m.id.replace(/-/g, '').toLowerCase();
+        return cleanId.endsWith(idSuffix.toLowerCase());
+      });
+
+      if (found) {
+        setMarket(found);
+      } else {
+        // Fallback: try direct UUID lookup if slug looks like a UUID
+        if (/^[0-9a-f-]{36}$/i.test(slug)) {
+          const directData = await fetchApi<Market>(`/api/v1/markets/${slug}`);
+          setMarket(directData);
+        } else {
+          setError("Market not found");
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to fetch market");
+    } finally {
+      setLoading(false);
+    }
+  }, [slug]);
+
+  return { market, loading, error, fetchMarketBySlug };
+}
+
 // Hook for fetching orderbook
 export function useOrderbook(marketId: string, outcomeId: string, shareType: string) {
   const [orderbook, setOrderbook] = useState<Orderbook | null>(null);
@@ -752,4 +797,158 @@ export function usePlaceCtfOrder() {
   }, [address]);
 
   return { placeCtfOrder, loading, error };
+}
+
+// ============================================================================
+// Referral System Hooks
+// ============================================================================
+
+// Referral dashboard types
+export interface ReferralTier {
+  level: number;
+  name: string;
+  commission_rate: string;
+  next_tier_requirement: number | null;
+}
+
+export interface ReferralActivity {
+  referral_address: string;
+  event_type: string;
+  volume: string;
+  commission: string;
+  timestamp: number;
+}
+
+export interface ReferralDashboard {
+  code: string | null;
+  total_referrals: number;
+  active_referrals: number;
+  total_earnings: string;
+  pending_earnings: string;
+  claimed_earnings: string;
+  tier: ReferralTier;
+  recent_activity: ReferralActivity[];
+}
+
+// Hook for fetching referral dashboard
+export function useReferralDashboard() {
+  const { address } = useAccount();
+  const [dashboard, setDashboard] = useState<ReferralDashboard | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchDashboard = useCallback(async () => {
+    if (!address) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchApi<ReferralDashboard>(
+        "/api/v1/referral/dashboard",
+        {},
+        address
+      );
+      setDashboard(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to fetch referral dashboard");
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  return { dashboard, loading, error, fetchDashboard };
+}
+
+// Hook for creating referral code
+export function useCreateReferralCode() {
+  const { address } = useAccount();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const createCode = useCallback(async (timestamp: number, signature: string) => {
+    if (!address) throw new Error("Wallet not connected");
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchApi<{ success: boolean; code: string; created_at: number }>(
+        "/api/v1/referral/code",
+        {
+          method: "POST",
+          body: JSON.stringify({ timestamp, signature }),
+        },
+        address
+      );
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to create referral code";
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  return { createCode, loading, error };
+}
+
+// Hook for binding to a referral code
+export function useBindReferralCode() {
+  const { address } = useAccount();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const bindCode = useCallback(async (code: string, timestamp: number, signature: string) => {
+    if (!address) throw new Error("Wallet not connected");
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchApi<{ success: boolean; referrer_address: string; referrer_code: string }>(
+        "/api/v1/referral/bind",
+        {
+          method: "POST",
+          body: JSON.stringify({ code, timestamp, signature }),
+        },
+        address
+      );
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to bind referral code";
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  return { bindCode, loading, error };
+}
+
+// Hook for claiming referral earnings
+export function useClaimReferralEarnings() {
+  const { address } = useAccount();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const claimEarnings = useCallback(async () => {
+    if (!address) throw new Error("Wallet not connected");
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchApi<{ success: boolean; amount: string; tx_hash: string | null }>(
+        "/api/v1/referral/claim",
+        {
+          method: "POST",
+        },
+        address
+      );
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to claim earnings";
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, [address]);
+
+  return { claimEarnings, loading, error };
 }

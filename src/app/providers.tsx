@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
+import { NotificationProvider } from "@/contexts/NotificationContext";
 
 // Dynamically import wallet providers to prevent SSR issues
 const WalletProviders = dynamic(
@@ -19,5 +20,9 @@ const WalletProviders = dynamic(
 );
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  return <WalletProviders>{children}</WalletProviders>;
+  return (
+    <WalletProviders>
+      <NotificationProvider>{children}</NotificationProvider>
+    </WalletProviders>
+  );
 }

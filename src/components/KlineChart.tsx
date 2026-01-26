@@ -101,8 +101,8 @@ export function KlineChart({ marketId, outcomeId, shareType, outcomeName }: Klin
         time: candleTime as UTCTimestamp,
         value: newVolume,
         color: price >= parseFloat(updatedCandle.open)
-          ? "rgba(38, 166, 154, 0.5)"
-          : "rgba(239, 83, 80, 0.5)",
+          ? "rgba(34, 197, 94, 0.5)"
+          : "rgba(239, 68, 68, 0.5)",
       });
     } else {
       // Create new candle
@@ -129,7 +129,7 @@ export function KlineChart({ marketId, outcomeId, shareType, outcomeName }: Klin
       volumeSeriesRef.current.update({
         time: candleTime as UTCTimestamp,
         value: amount,
-        color: "rgba(38, 166, 154, 0.5)",
+        color: "rgba(34, 197, 94, 0.5)",
       });
     }
   }, [getPeriodSeconds]);
@@ -238,8 +238,8 @@ export function KlineChart({ marketId, outcomeId, shareType, outcomeName }: Klin
             time: c.time as UTCTimestamp,
             value: parseFloat(c.volume),
             color: parseFloat(c.close) >= parseFloat(c.open)
-              ? "rgba(38, 166, 154, 0.5)"
-              : "rgba(239, 83, 80, 0.5)",
+              ? "rgba(34, 197, 94, 0.5)"
+              : "rgba(239, 68, 68, 0.5)",
           }));
           volumeSeriesRef.current.setData(volumeData);
         }
@@ -265,25 +265,25 @@ export function KlineChart({ marketId, outcomeId, shareType, outcomeName }: Klin
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: "#1f2937" },
-        textColor: "#9ca3af",
+        background: { type: ColorType.Solid, color: "#ffffff" },
+        textColor: "#737373",
       },
       grid: {
-        vertLines: { color: "#374151" },
-        horzLines: { color: "#374151" },
+        vertLines: { color: "#f5f5f5" },
+        horzLines: { color: "#f5f5f5" },
       },
       crosshair: {
         mode: 1,
       },
       rightPriceScale: {
-        borderColor: "#374151",
+        borderColor: "#e5e5e5",
         scaleMargins: {
           top: 0.1,
           bottom: 0.2,
         },
       },
       timeScale: {
-        borderColor: "#374151",
+        borderColor: "#e5e5e5",
         timeVisible: true,
         secondsVisible: false,
       },
@@ -294,12 +294,12 @@ export function KlineChart({ marketId, outcomeId, shareType, outcomeName }: Klin
 
     // Add candlestick series
     const candleSeries = chart.addCandlestickSeries({
-      upColor: "#26a69a",
-      downColor: "#ef5350",
-      borderDownColor: "#ef5350",
-      borderUpColor: "#26a69a",
-      wickDownColor: "#ef5350",
-      wickUpColor: "#26a69a",
+      upColor: "#22c55e",
+      downColor: "#ef4444",
+      borderDownColor: "#ef4444",
+      borderUpColor: "#22c55e",
+      wickDownColor: "#ef4444",
+      wickUpColor: "#22c55e",
       priceFormat: {
         type: "price",
         precision: 4,
@@ -366,15 +366,15 @@ export function KlineChart({ marketId, outcomeId, shareType, outcomeName }: Klin
   }, [fetchKlines]);
 
   return (
-    <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+    <div className="card-9v overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center space-x-2">
-          <span className="text-white font-medium">{outcomeName}</span>
-          <span className="text-gray-400 text-sm uppercase">{shareType}</span>
+          <span className="text-foreground font-medium">{outcomeName}</span>
+          <span className="text-muted-foreground text-sm uppercase font-mono">{shareType}</span>
           {/* Live indicator */}
-          <span className={`flex items-center text-xs ${isLive ? "text-green-400" : "text-gray-500"}`}>
-            <span className={`w-2 h-2 rounded-full mr-1 ${isLive ? "bg-green-400 animate-pulse" : "bg-gray-500"}`}></span>
+          <span className={`flex items-center text-xs ${isLive ? "text-success" : "text-muted-foreground"}`}>
+            <span className={`w-2 h-2 rounded-full mr-1 ${isLive ? "bg-success animate-pulse" : "bg-muted-foreground"}`}></span>
             {isLive ? "LIVE" : "OFFLINE"}
           </span>
         </div>
@@ -385,10 +385,10 @@ export function KlineChart({ marketId, outcomeId, shareType, outcomeName }: Klin
             <button
               key={p.value}
               onClick={() => setPeriod(p.value)}
-              className={`px-3 py-1 text-xs rounded transition ${
+              className={`px-3 py-1 text-xs rounded transition font-mono ${
                 period === p.value
-                  ? "bg-primary-600 text-white"
-                  : "text-gray-400 hover:text-white hover:bg-gray-700"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
               }`}
             >
               {p.label}
@@ -400,18 +400,18 @@ export function KlineChart({ marketId, outcomeId, shareType, outcomeName }: Klin
       {/* Chart container */}
       <div className="relative" style={{ height: "300px" }}>
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-800/50 z-10">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+          <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10">
+            <div className="animate-spin rounded-full h-8 w-8 border-2 border-foreground border-t-transparent"></div>
           </div>
         )}
 
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-800/50 z-10">
+          <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10">
             <div className="text-center">
-              <p className="text-red-400 text-sm mb-2">{error}</p>
+              <p className="text-destructive text-sm mb-2">{error}</p>
               <button
                 onClick={fetchKlines}
-                className="text-primary-400 text-sm hover:underline"
+                className="text-foreground text-sm hover:underline"
               >
                 Retry
               </button>

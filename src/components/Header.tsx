@@ -7,6 +7,7 @@ import { useAccount } from "wagmi";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { NotificationBell } from "./NotificationBell";
 
 export function Header() {
   const { isConnected } = useAccount();
@@ -27,54 +28,85 @@ export function Header() {
 
   const usdcBalance = balances.find((b) => b.token === "USDC");
 
+  const navItems = [
+    { href: "/", label: "Markets" },
+    { href: "/p2p", label: "P2P" },
+    { href: "/portfolio", label: "Portfolio" },
+    { href: "/account", label: "Account" },
+  ];
+
   return (
-    <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-50">
+    <header className="bg-background border-b border-border sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 py-3 md:py-4">
         {/* Desktop & Mobile Header */}
         <div className="flex items-center justify-between">
           {/* Logo */}
-          <Link href="/" className="flex items-center space-x-2 md:space-x-3 hover:opacity-80 transition">
+          <Link href="/" className="flex items-center space-x-3 hover:opacity-80 transition group">
             <Image
               src="/logo.png"
-              alt="nextX Logo"
-              width={32}
-              height={32}
-              className="rounded-lg md:w-9 md:h-9"
+              alt="9V Logo"
+              width={36}
+              height={36}
+              className="rounded-lg md:w-10 md:h-10"
             />
-            <span className="text-xl md:text-2xl font-bold text-white">nextX</span>
+            <div className="flex items-center gap-2">
+              <span className="text-2xl md:text-3xl font-bold text-foreground tracking-tight">
+                9V
+              </span>
+              <span className="hidden md:inline-block text-xs font-mono text-muted-foreground uppercase tracking-wider">
+                Prediction
+              </span>
+            </div>
           </Link>
 
           {/* Desktop Navigation */}
-          <nav className="hidden md:flex space-x-6 items-center">
-            <Link
-              href="/"
-              className={`transition ${
-                pathname === "/" ? "text-white font-medium" : "text-gray-300 hover:text-white"
-              }`}
-            >
-              Markets
-            </Link>
-            <Link
-              href="/portfolio"
-              className={`transition ${
-                pathname === "/portfolio" ? "text-white font-medium" : "text-gray-300 hover:text-white"
-              }`}
-            >
-              Portfolio
-            </Link>
+          <nav className="hidden md:flex items-center space-x-1">
+            {navItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition ${
+                  pathname === item.href
+                    ? "text-foreground bg-secondary"
+                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                }`}
+              >
+                {item.label}
+              </Link>
+            ))}
           </nav>
 
           {/* Desktop Actions */}
           <div className="hidden md:flex items-center space-x-4">
+            {isConnected && <NotificationBell />}
             {isConnected && usdcBalance && (
-              <div className="bg-gray-700 px-4 py-2 rounded-lg">
-                <span className="text-gray-400 text-sm">Balance:</span>
-                <span className="ml-2 text-white font-medium">
-                  {parseFloat(usdcBalance.available).toFixed(2)} USDC
+              <div className="flex items-center gap-3 bg-secondary px-4 py-2 rounded-lg">
+                <span className="text-muted-foreground text-sm">Balance</span>
+                <span className="text-foreground font-mono font-semibold">
+                  {parseFloat(usdcBalance.available).toFixed(2)}
                 </span>
+                <span className="text-muted-foreground text-xs">USDC</span>
               </div>
             )}
-            <ConnectButton />
+            <ConnectButton.Custom>
+              {({ account, chain, openAccountModal, openConnectModal, mounted }) => {
+                const connected = mounted && account && chain;
+                return (
+                  <button
+                    onClick={connected ? openAccountModal : openConnectModal}
+                    className="btn-9v btn-9v-primary"
+                  >
+                    {connected ? (
+                      <span className="font-mono">
+                        {account.displayName}
+                      </span>
+                    ) : (
+                      "Connect Wallet"
+                    )}
+                  </button>
+                );
+              }}
+            </ConnectButton.Custom>
           </div>
 
           {/* Mobile Actions */}
@@ -85,10 +117,10 @@ export function Header() {
                 return (
                   <button
                     onClick={connected ? openAccountModal : openConnectModal}
-                    className="bg-primary-600 hover:bg-primary-700 px-3 py-2 rounded-lg text-white text-sm font-medium transition"
+                    className="bg-foreground text-background px-3 py-2 rounded-lg text-sm font-medium transition hover:opacity-90"
                   >
                     {connected ? (
-                      <span className="truncate max-w-[80px] inline-block">
+                      <span className="truncate max-w-[80px] inline-block font-mono">
                         {account.displayName}
                       </span>
                     ) : (
@@ -102,7 +134,7 @@ export function Header() {
             {/* Hamburger Menu */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 text-gray-400 hover:text-white transition"
+              className="p-2 text-muted-foreground hover:text-foreground transition rounded-md hover:bg-secondary"
               aria-label="Toggle menu"
             >
               {mobileMenuOpen ? (
@@ -120,38 +152,34 @@ export function Header() {
 
         {/* Mobile Menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden mt-4 pt-4 border-t border-gray-700">
-            <nav className="flex flex-col space-y-3">
-              <Link
-                href="/"
-                className={`py-2 px-3 rounded-lg transition ${
-                  pathname === "/"
-                    ? "bg-primary-900 text-white"
-                    : "text-gray-300 hover:bg-gray-700"
-                }`}
-              >
-                Markets
-              </Link>
-              <Link
-                href="/portfolio"
-                className={`py-2 px-3 rounded-lg transition ${
-                  pathname === "/portfolio"
-                    ? "bg-primary-900 text-white"
-                    : "text-gray-300 hover:bg-gray-700"
-                }`}
-              >
-                Portfolio
-              </Link>
+          <div className="md:hidden mt-4 pt-4 border-t border-border animate-slideDown">
+            <nav className="flex flex-col space-y-1">
+              {navItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`py-3 px-4 rounded-lg transition font-medium ${
+                    pathname === item.href
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              ))}
             </nav>
 
             {/* Mobile Balance */}
             {isConnected && usdcBalance && (
-              <div className="mt-4 pt-4 border-t border-gray-700">
-                <div className="bg-gray-700 px-4 py-3 rounded-lg flex items-center justify-between">
-                  <span className="text-gray-400 text-sm">Available Balance</span>
-                  <span className="text-white font-medium">
-                    {parseFloat(usdcBalance.available).toFixed(2)} USDC
-                  </span>
+              <div className="mt-4 pt-4 border-t border-border">
+                <div className="bg-secondary px-4 py-3 rounded-lg flex items-center justify-between">
+                  <span className="text-muted-foreground text-sm">Available Balance</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-foreground font-mono font-semibold">
+                      {parseFloat(usdcBalance.available).toFixed(2)}
+                    </span>
+                    <span className="text-muted-foreground text-xs">USDC</span>
+                  </div>
                 </div>
               </div>
             )}

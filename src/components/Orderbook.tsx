@@ -64,11 +64,11 @@ export function Orderbook({
   const maxAskSize = Math.max(...asks.map((a) => parseFloat(a.size)), 1);
 
   return (
-    <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-      <h3 className="text-sm font-semibold text-gray-400 mb-4">Order Book</h3>
+    <div className="card-9v p-4">
+      <h3 className="text-sm font-medium text-muted-foreground mb-4">Order Book</h3>
 
       {/* Header */}
-      <div className="grid grid-cols-3 text-xs text-gray-500 pb-2 border-b border-gray-700">
+      <div className="grid grid-cols-3 text-xs text-muted-foreground pb-2 border-b border-border font-mono">
         <span>Price</span>
         <span className="text-center">Size</span>
         <span className="text-right">Total</span>
@@ -86,15 +86,15 @@ export function Orderbook({
           />
         ))}
         {asks.length === 0 && (
-          <div className="py-4 text-center text-gray-500 text-sm">No asks</div>
+          <div className="py-4 text-center text-muted-foreground text-sm">No asks</div>
         )}
       </div>
 
       {/* Spread indicator */}
-      <div className="py-2 border-y border-gray-700 my-2">
+      <div className="py-2 border-y border-border my-2">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-400">Spread</span>
-          <span className="text-white">
+          <span className="text-muted-foreground">Spread</span>
+          <span className="text-foreground font-mono">
             {bids.length > 0 && asks.length > 0
               ? (
                   parseFloat(asks[0]?.price || "0") -
@@ -117,7 +117,7 @@ export function Orderbook({
           />
         ))}
         {bids.length === 0 && (
-          <div className="py-4 text-center text-gray-500 text-sm">No bids</div>
+          <div className="py-4 text-center text-muted-foreground text-sm">No bids</div>
         )}
       </div>
     </div>
@@ -138,30 +138,30 @@ function OrderbookRow({ level, type, maxSize, onClick }: OrderbookRowProps) {
   return (
     <div
       onClick={onClick}
-      className={`relative grid grid-cols-3 py-1 text-sm cursor-pointer hover:bg-gray-700/50 ${
+      className={`relative grid grid-cols-3 py-1 text-sm cursor-pointer hover:bg-secondary/50 ${
         type === "bid" ? "orderbook-bid" : "orderbook-ask"
       }`}
     >
       {/* Background bar */}
       <div
         className={`absolute inset-y-0 right-0 ${
-          type === "bid" ? "bg-green-500/10" : "bg-red-500/10"
+          type === "bid" ? "bg-success/10" : "bg-destructive/10"
         }`}
         style={{ width: `${widthPercent}%` }}
       />
 
       {/* Content */}
       <span
-        className={`relative z-10 ${
-          type === "bid" ? "text-green-400" : "text-red-400"
+        className={`relative z-10 font-mono ${
+          type === "bid" ? "text-success" : "text-destructive"
         }`}
       >
         {parseFloat(level.price).toFixed(2)}
       </span>
-      <span className="relative z-10 text-center text-white">
+      <span className="relative z-10 text-center text-foreground font-mono">
         {size.toFixed(0)}
       </span>
-      <span className="relative z-10 text-right text-gray-400">
+      <span className="relative z-10 text-right text-muted-foreground font-mono">
         {(parseFloat(level.price) * size).toFixed(2)}
       </span>
     </div>
